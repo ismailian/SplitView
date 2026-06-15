@@ -1,0 +1,148 @@
+/**
+ * One terminal pane: an xterm.js instance wired to a backend PTY (CLAUDE.md §4).
+ *
+ * A `Pane` owns a stable DOM node that the layout renderer *re-parents* rather
+ * than recreating, so scrollback and the WebGL context survive layout changes
+ * (CLAUDE.md §12, §20).
+ */
+
+import type { Terminal } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import { createTerminal } from "./renderer";
+import type { Config } from "../config/config";
+import {
+  spawnPty,
+  writePty,
+  resizePty,
+  closePty,
+  type PaneId,
+} from "../ipc/commands";
+
+const RESIZE_DEBOUNCE_MS = 40;
+
+export class Pane {
+  /** Stable wrapper element; the renderer moves this around the DOM. */
+  readonly el: HTMLDivElement;
+  readonly term: Terminal;
+  private readonly fit: FitAddon;
+  private paneId: PaneId | null = null;
+  private resizeTimer: number | null = null;
+  private lastCols = 0;
+  private lastRows = 0;
+  private disposed = false;
+
+  private constructor(el: HTMLDivElement, term: Terminal, fit: FitAddon) {
+    this.el = el;
+    this.term = term;
+    this.fit = fit;
+  }
+
+  /** Create a pane, mount xterm.js, and spawn its PTY. */
+  static async create(cfg: Config, cwd?: string): Promise<Pane> {
+    const el = document.createElement("div");
+    el.className = "pane";
+
+    const { term, fit } = createTerminal(el, cfg);
+    const pane = new Pane(el, term, fit);
+
+    // Size to the container before spawning so the PTY starts at the right size.
+    pane.safeFit();
+    const { cols, rows } = term;
+    pane.lastCols = cols;
+    pane.lastRows = rows;
+
+    const id = await spawnPty(
+      {
+        cols,
+        rows,
+        cwd,
+        shell: cfg.shell,
+        prompt: cfg.prompt,
+        promptStyle: cfg.promptStyle,
+      },
+      (bytes) => {
+        if (!pane.disposed) term.write(bytes);
+      },
+    );
+    pane.paneId = id;
+
+    // Keystrokes -> PTY. xterm.js buffers/flushes on its own; we don't add a
+    // per-keystroke loop on top.
+    term.onData((data) => {
+      if (pane.paneId) void writePty(pane.paneId, encode(data));
+    });
+
+    return pane;
+  }
+
+  get id(): PaneId | null {
+    return this.paneId;
+  }
+
+  /** Send raw bytes to the PTY (used for double-prefix passthrough). */
+  sendBytes(bytes: Uint8Array): void {
+    if (this.paneId) void writePty(this.paneId, bytes);
+  }
+
+  /** Send UTF-8 text to the PTY as if typed (e.g. an inserted file path). */
+  sendText(text: string): void {
+    this.sendBytes(encode(text));
+  }
+
+  /**
+   * Change the terminal's font size, then re-fit so the PTY tracks the new
+   * cols/rows (CLAUDE.md §13, §20). Used by the zoom-in/out actions.
+   */
+  setFontSize(px: number): void {
+    if (this.disposed) return;
+    this.term.options.fontSize = px;
+    this.refit();
+  }
+
+  focus(): void {
+    this.term.focus();
+  }
+
+  private safeFit(): void {
+    try {
+      this.fit.fit();
+    } catch {
+      // Element not visible / zero-size yet; ignore until next layout pass.
+    }
+  }
+
+  /**
+   * Re-fit after a layout change and, only if the dimensions actually changed,
+   * resize the PTY. Debounced to avoid reflow storms (CLAUDE.md §13).
+   */
+  refit(): void {
+    if (this.disposed) return;
+    this.safeFit();
+    const { cols, rows } = this.term;
+    if (cols === this.lastCols && rows === this.lastRows) return;
+    this.lastCols = cols;
+    this.lastRows = rows;
+
+    if (this.resizeTimer !== null) window.clearTimeout(this.resizeTimer);
+    this.resizeTimer = window.setTimeout(() => {
+      this.resizeTimer = null;
+      if (this.paneId) void resizePty(this.paneId, cols, rows);
+    }, RESIZE_DEBOUNCE_MS);
+  }
+
+  /** Kill the PTY and dispose the terminal. */
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.resizeTimer !== null) window.clearTimeout(this.resizeTimer);
+    const id = this.paneId;
+    this.paneId = null;
+    this.term.dispose();
+    this.el.remove();
+    if (id) await closePty(id);
+  }
+}
+
+function encode(s: string): Uint8Array {
+  return new TextEncoder().encode(s);
+}

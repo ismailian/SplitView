@@ -1,0 +1,42 @@
+[package]
+name = "splitview"
+version = "0.1.0"
+description = "A minimalistic, keyboard-driven terminal emulator"
+authors = ["SplitView"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "splitview_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `compression` is dropped from the default feature set: it pulls in brotli
+# 8.0.3, which fails to compile on this toolchain. It only brotli-compresses the
+# embedded frontend assets — without it they are embedded uncompressed, which is
+# fine. The remaining features mirror tauri's defaults.
+tauri = { version = "2", default-features = false, features = [
+    "common-controls-v6",
+    "dbus",
+    "dynamic-acl",
+    "wry",
+    "webkit2gtk",
+    "webview2-com",
+    "x11",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+portable-pty = "0.8"
+dirs = "5"
+# Native file picker for the Win+O "insert file path" action. We drive its Rust
+# API from our own `pick_file` command, so no extra capability is exposed to the
+# frontend (CLAUDE.md §15).
+tauri-plugin-dialog = "2"

@@ -1,0 +1,586 @@
+# CLAUDE.md — SplitView
+
+> Context file for AI coding agents (and humans) working in this repository.
+> Read this **before** writing code. It encodes the architecture, conventions,
+> domain vocabulary, and footguns specific to SplitView. When something here
+> conflicts with a generic instinct, follow this file.
+
+---
+
+## 1. What SplitView is
+
+SplitView is a **minimalistic, keyboard-driven terminal emulator** for the
+desktop, in the spirit of a tmux layout but as a native GUI app. The whole
+point is fast, distraction-free terminal work where the UI gets out of the way:
+thin dividers instead of chrome, every action reachable from the keyboard, and
+terminal performance that feels native rather than "a terminal inside a web
+page."
+
+It is built with **Rust + Tauri**. Rust owns the pseudo-terminals (PTYs) and
+process lifecycle; the webview frontend owns rendering, the split layout, and
+the keymap.
+
+### The features that define the product (do not regress these)
+
+- **Split panes** horizontally and vertically.
+- **Switch focus** between panes by keyboard.
+- **Move / swap** panes around the layout by keyboard.
+- **Zoom** a single pane to fill the window for focus, then restore.
+- **Keyboard-only operation**: every one of the above is reachable without the
+  mouse. The mouse is a convenience, never a requirement.
+- **Thin separators**, never full borders around panes.
+- A **minimal shell experience** (think tmux/plain bash, *not* PowerShell or
+  cmd.exe) with a custom prompt of the form `` {user} @ {cwd} $ ``.
+- A **custom terminal that still feels native**: real PTYs, real interactivity,
+  full ANSI support, low input latency, GPU-accelerated rendering.
+
+---
+
+## 2. Design principles (the non-negotiables)
+
+1. **Keyboard-first.** If you add a feature, you add a keybinding for it. A
+   feature that only works with the mouse is incomplete.
+2. **Minimal chrome.** No pane borders, no rounded corners, no drop shadows, no
+   gradient toolbars. Panes are separated by a **1px line** and nothing more.
+   Anything that adds visual weight needs a strong justification.
+3. **Native feel beats fancy.** Latency and correctness of the terminal come
+   first. Never trade input responsiveness or ANSI correctness for a visual
+   nicety.
+4. **The shell is the shell.** SplitView spawns a real login shell in a real
+   PTY. We do not reimplement a shell, we do not parse the user's commands, and
+   we do not intercept terminal keystrokes unless the user is in *prefix mode*
+   (see §9).
+5. **Rust owns processes, the frontend owns layout.** Keep that boundary clean.
+   The frontend should never need to know how a PTY is spawned; the backend
+   should never need to know how panes are arranged on screen.
+
+---
+
+## 3. Tech stack
+
+| Layer | Choice | Notes |
+|---|---|---|
+| App shell | **Tauri 2.x** | Rust core process + system webview UI. Pin the latest stable 2.x; verify versions in `Cargo.toml` / `package.json` before assuming an API exists. |
+| Backend language | **Rust** (2021 edition) | PTY management, IPC commands, app state. |
+| PTY | **`portable-pty`** | Cross-platform PTY spawn/read/write/resize. The de-facto crate for this (from the WezTerm project). |
+| Error handling | **`thiserror`** (+ `anyhow` for internal glue) | Command errors must be serializable to the frontend. |
+| Frontend language | **TypeScript** | Strict mode on. |
+| Frontend tooling | **Vite** | Tauri's default dev server / bundler. |
+| Terminal rendering | **`@xterm/xterm`** + addons | `@xterm/addon-fit`, `@xterm/addon-webgl`, optionally `@xterm/addon-web-links`, `@xterm/addon-search`. Note the **scoped `@xterm/*` package names** — the old unscoped `xterm` packages are legacy. |
+| Layout / UI | **Plain TypeScript** (no heavy framework) | The terminal surface and split layout are managed imperatively for predictable performance. Avoid introducing React/Vue for the terminal grid; re-render storms are the enemy here. A tiny reactive helper for non-terminal UI is acceptable if justified. |
+| Config | **TOML** | User config at `~/.config/splitview/config.toml` (platform-appropriate dir). |
+
+**Primary platforms: macOS and Linux.** Windows is explicitly secondary and we
+do **not** default to PowerShell or cmd.exe (see §18). If Windows is ever
+supported it goes through a POSIX-style shell, not the Windows prompt.
+
+---
+
+## 4. Architecture overview
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Webview (Frontend, TypeScript)                                │
+│                                                                │
+│   Keymap ── dispatches ──▶ Layout tree ── renders ──▶ Panes    │
+│     │                          │                        │      │
+│     │                          │                  xterm.js per  │
+│     │                          │                  leaf pane      │
+│     │                          ▼                        │       │
+│     │                    1px dividers                    │      │
+│     └──────────── invoke() / Channel ────────────────────┘      │
+│                              │                                  │
+└──────────────────────────────┼─────────────────────────────────┘
+                                │  Tauri IPC
+┌──────────────────────────────┼─────────────────────────────────┐
+│  Rust core (Backend)          ▼                                 │
+│                                                                 │
+│   Commands ──▶ AppState { panes: HashMap<PaneId, PtyHandle> }   │
+│                       │                                         │
+│            portable-pty: spawn shell in PTY                     │
+│                       │                                         │
+│        reader thread ─┴─▶ streams bytes ─▶ Channel ─▶ frontend  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### PTY lifecycle / data flow (read this carefully)
+
+1. Frontend creates a leaf pane in the layout tree, mounts an xterm.js instance,
+   and calls `spawn_pty(...)` passing a **Tauri `Channel<Vec<u8>>`** for output.
+2. Backend opens a PTY (`portable_pty::native_pty_system().openpty(...)`),
+   builds a `CommandBuilder` for the user's shell, spawns the child, stores a
+   `PtyHandle` in `AppState` keyed by `PaneId`, and starts a **dedicated reader
+   thread**.
+3. The reader thread blocks on the PTY's reader, reads into a buffer
+   (8–64 KB), and forwards each chunk over the `Channel`. The frontend writes
+   chunks straight into `term.write(bytes)`.
+4. Keystrokes in xterm.js fire `onData`, which calls `write_pty(pane_id, bytes)`;
+   the backend writes to the PTY master.
+5. Resize: the fit addon computes `{cols, rows}`; if they changed, the frontend
+   calls `resize_pty(pane_id, cols, rows)`, which calls `master.resize(...)`.
+6. On close, the backend kills the child, drops the master (which signals EOF to
+   the reader thread so it exits), and removes the handle from `AppState`.
+
+**Scrollback lives in xterm.js, not in Rust.** The backend is a dumb, fast pipe.
+
+---
+
+## 5. Repository structure
+
+```
+splitview/
+├── CLAUDE.md                  ← this file
+├── package.json
+├── vite.config.ts
+├── tsconfig.json
+├── src/                       ← frontend (TypeScript)
+│   ├── main.ts                ← app bootstrap
+│   ├── terminal/
+│   │   ├── Pane.ts            ← xterm.js wrapper + PTY wiring per leaf
+│   │   └── renderer.ts        ← webgl/canvas renderer setup, theme application
+│   ├── layout/
+│   │   ├── tree.ts            ← layout tree types + pure operations (TESTED)
+│   │   ├── render.ts          ← maps tree -> DOM, draws dividers
+│   │   └── divider.ts         ← draggable 1px separators
+│   ├── keymap/
+│   │   ├── keymap.ts          ← prefix engine + binding registry
+│   │   └── actions.ts         ← action handlers (split, focus, move, zoom...)
+│   ├── ipc/
+│   │   └── commands.ts        ← thin typed wrappers over Tauri invoke()/Channel
+│   ├── config/
+│   │   └── config.ts          ← load/parse/validate TOML config
+│   └── styles/
+│       └── theme.css          ← CSS variables; divider + colors live here
+└── src-tauri/                 ← backend (Rust)
+    ├── Cargo.toml
+    ├── tauri.conf.json
+    ├── build.rs
+    ├── capabilities/
+    │   └── default.json       ← Tauri v2 permissions (expose only what we use)
+    └── src/
+        ├── main.rs            ← entrypoint, builder, invoke_handler
+        ├── lib.rs
+        ├── state.rs           ← AppState, PtyHandle, PaneId
+        ├── pty.rs             ← spawn/read/write/resize/kill via portable-pty
+        ├── shell.rs           ← shell detection + prompt injection (see §8)
+        └── commands.rs        ← #[tauri::command] functions
+```
+
+---
+
+## 6. Glossary / domain concepts
+
+- **PTY (pseudo-terminal):** the kernel object pair (master/slave) that lets a
+  GUI program talk to a shell as if it were a real terminal. The shell writes to
+  the slave; we read/write the master.
+- **Pane:** one terminal in the UI. Backed by exactly one PTY and one xterm.js
+  instance. A pane is always a **leaf** in the layout tree.
+- **Layout tree:** a binary tree describing the split arrangement. A node is
+  either a `leaf` (a pane) or a `split` (two children + an orientation + a
+  ratio). Identical mental model to tmux/i3.
+- **Orientation:** described by the **divider line**, not the axis of motion:
+  - **Horizontal split** → a *horizontal* line → panes stacked **top/bottom**.
+  - **Vertical split** → a *vertical* line → panes side by side **left/right**.
+  - Internally we use the unambiguous verbs **`split_down`** and
+    **`split_right`** in code. UI-facing labels map: "split horizontally" =
+    `split_down`, "split vertically" = `split_right`. (See §9 diagrams.)
+- **Focus:** the active pane, which receives keyboard input and is visually
+  indicated by the *adjacent divider*, never a heavy border.
+- **Zoom:** temporarily expand the focused pane to fill the window, hiding its
+  siblings, without destroying the tree. Toggling zoom restores the layout.
+- **Prefix mode:** a tmux-style modal state entered by the prefix key, in which
+  the next keystroke is interpreted as a SplitView command instead of being sent
+  to the shell. This is how we avoid stealing keys from vim/emacs/etc.
+
+---
+
+## 7. Layout tree contract
+
+`src/layout/tree.ts` holds the canonical model. Keep these as **pure
+functions** with no DOM/IPC side effects so they can be unit-tested.
+
+```ts
+type PaneId = string;
+
+type Node =
+  | { kind: "leaf"; paneId: PaneId }
+  | {
+      kind: "split";
+      orientation: "row" | "column"; // row = side-by-side (vertical divider)
+                                      // column = stacked (horizontal divider)
+      ratio: number;                  // 0..1, size of the first child
+      first: Node;
+      second: Node;
+    };
+
+interface Layout {
+  root: Node | null;
+  focused: PaneId | null;
+  zoomed: PaneId | null; // non-null when a pane is zoomed
+}
+```
+
+Required operations (all pure, all tested):
+
+- `splitFocused(layout, dir: "down" | "right", newPaneId): Layout`
+- `focusDirection(layout, dir: "up"|"down"|"left"|"right"): Layout`
+- `focusNext(layout) / focusPrev(layout): Layout`
+- `movePane(layout, dir): Layout`  — swap focused with neighbor in a direction
+- `closeFocused(layout): { layout, removedPaneId }` — collapse the split,
+  promote the sibling, keep ratios sane
+- `toggleZoom(layout): Layout`
+- `setRatio(layout, splitPathOrId, ratio): Layout` — for divider dragging
+
+Invariants the tests must guard:
+
+- A `split` node always has exactly two children.
+- Closing a pane never leaves a `split` with a single child (the sibling is
+  promoted in its place).
+- `ratio` stays clamped to a sane range (e.g. `0.05..0.95`) so panes never
+  collapse to zero.
+- `focused` always points at an existing leaf (or null when empty).
+- Zoom is purely presentational: the tree shape is unchanged while zoomed.
+
+---
+
+## 8. The terminal prompt (`{user} @ {cwd} $`) — important, easy to get wrong
+
+**The terminal emulator does not draw the prompt. The shell does.** xterm.js
+just renders whatever bytes the shell emits. So to get the prompt
+
+```
+{user} @ {working directory} $
+```
+
+SplitView must make the *shell* produce it, and it must do so **without
+destroying the user's normal environment** (PATH, aliases, completions).
+
+### Strategy: inject prompt at spawn, per shell
+
+Detect the shell (`$SHELL`, falling back to `bash` → `zsh` → `sh`) and spawn it
+with a custom init that sources the user's normal config first, then overrides
+only the prompt variable.
+
+- **bash:** spawn `bash --rcfile <tmp_rcfile>` (or set `PROMPT_COMMAND`), where
+  `<tmp_rcfile>` does:
+  ```bash
+  [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
+  PS1='\u @ \w \$ '     # \u=user  \w=cwd  \$ = $ (or # for root)
+  ```
+- **zsh:** point `ZDOTDIR` at a temp dir whose `.zshrc` sources the real one,
+  then sets:
+  ```zsh
+  source "${HOME}/.zshrc" 2>/dev/null
+  PROMPT='%n @ %~ %# '   # %n=user  %~=cwd  %#= % / #
+  ```
+- **fish / others:** documented best-effort; if we can't cleanly inject, fall
+  back to the user's own prompt and log a warning rather than mangle it.
+
+The prompt template is configurable (`prompt = "{user} @ {cwd} $ "` in config).
+`shell.rs` owns translating that template into per-shell prompt syntax. Keep
+that mapping in one place.
+
+### Gotcha
+
+Setting `PS1` as an *environment variable* before spawning does **not** work —
+the user's rc file runs *after* and overwrites it. You must inject *after* the
+rc file runs. That is the whole reason for the `--rcfile` / `ZDOTDIR` dance.
+
+On **macOS**, spawn a **login shell** (e.g. include `-l`) or source the login
+profile so PATH and Homebrew are populated; otherwise users get a broken
+environment.
+
+---
+
+## 9. Keyboard shortcuts
+
+SplitView uses a **prefix model** like tmux to avoid stealing keys from
+terminal programs. Default prefix is **`Ctrl+A`** (configurable). Press the
+prefix, then a command key. Pressing the prefix **twice** sends a literal
+prefix keystroke to the shell.
+
+The keymap is **data-driven**: bindings live in a registry and are overridable
+from config. Don't hardcode key handling inside action functions.
+
+### Split terminology, made unambiguous
+
+```
+split VERTICALLY (vertical divider, `split_right`)
++--------+--------+
+|        |        |
+| pane A | pane B |          A is focused, B is new
+|        |        |
++--------+--------+
+
+split HORIZONTALLY (horizontal divider, `split_down`)
++-----------------+
+|     pane A      |
++-----------------+          A is focused, B is new
+|     pane B      |
++-----------------+
+```
+
+### Default keymap
+
+| Action | Default binding (after prefix) | Internal action |
+|---|---|---|
+| Split horizontally (stacked) | `-` or `s` | `split_down` |
+| Split vertically (side by side) | `\` or `v` | `split_right` |
+| Focus left / down / up / right | `h` / `j` / `k` / `l` or arrows | `focus_dir` |
+| Cycle focus to next pane | `o` | `focus_next` |
+| Move/swap pane left/down/up/right | `Shift+h/j/k/l` or `Shift+arrows` | `move_pane` |
+| Toggle zoom (fullscreen focus) | `z` | `toggle_zoom` |
+| Resize focused pane | `Ctrl+h/j/k/l` (held in prefix) | `resize_pane` |
+| Close focused pane | `x` (with confirm) | `close_pane` |
+| Reload config | `r` | `reload_config` |
+| Send literal prefix to shell | press prefix again | — |
+
+### Implementation notes
+
+- The keymap engine listens at the document level. **It must not swallow keys
+  unless prefix mode is active** (or the chord is an explicit non-prefix global
+  binding the user opted into). Outside prefix mode, keys flow to the focused
+  xterm.js instance untouched.
+- Prefix mode has a short timeout; an unrecognized key cancels it silently.
+- Resize/move operate on the focused pane and mutate the layout tree, then
+  re-render. Resizing must also `resize_pty` for the affected leaves.
+
+---
+
+## 10. IPC contract (frontend ⇄ backend)
+
+Keep all Tauri calls behind typed wrappers in `src/ipc/commands.ts`. Never call
+`invoke` from random UI code.
+
+### Commands (Rust `#[tauri::command]`)
+
+| Command | Signature (logical) | Purpose |
+|---|---|---|
+| `spawn_pty` | `(channel: Channel<Vec<u8>>, opts: SpawnOpts) -> Result<PaneId>` | Open PTY, spawn shell, start reader thread streaming to `channel`. |
+| `write_pty` | `(pane_id: PaneId, data: Vec<u8>) -> Result<()>` | Write keystrokes/bytes to the PTY master. |
+| `resize_pty` | `(pane_id: PaneId, cols: u16, rows: u16) -> Result<()>` | Resize the PTY. |
+| `close_pty` | `(pane_id: PaneId) -> Result<()>` | Kill child, drop master, remove handle. |
+| `list_panes` | `() -> Result<Vec<PaneId>>` | Mostly for debugging/recovery. |
+
+`SpawnOpts` includes optional `cwd`, optional `shell` override, and the prompt
+template (or the backend reads it from loaded config).
+
+### Streaming
+
+Use a **Tauri `Channel<Vec<u8>>`** per pane for PTY → frontend output. Prefer
+this over `emit`/event-per-chunk: it is the efficient path and keeps ordering.
+Do **not** emit one IPC message per byte.
+
+### Data must be byte-safe
+
+Terminal output is arbitrary bytes, not UTF-8 text. Pass it as **byte arrays**
+(`Vec<u8>` / `Uint8Array`). Do **not** round-trip terminal data through a JSON
+string — it will corrupt non-UTF-8 sequences and break rendering.
+
+---
+
+## 11. Rust backend conventions
+
+- `rustfmt` and `clippy` are required; CI fails on warnings. Run `cargo fmt` and
+  `cargo clippy --all-targets -- -D warnings` before finishing.
+- **No `unwrap()` / `expect()` / `panic!` in command handlers or the reader
+  thread.** A panic in the core process can take down the app. Return a typed
+  `Error` that serializes to the frontend.
+- Define one error enum with `thiserror`, `impl serde::Serialize`, so commands
+  return `Result<T, Error>` and the frontend gets a structured reason.
+- `AppState` example:
+  ```rust
+  pub struct PtyHandle {
+      writer: Box<dyn std::io::Write + Send>,
+      master: Box<dyn portable_pty::MasterPty + Send>,
+      child:  Box<dyn portable_pty::Child + Send>,
+  }
+  pub struct AppState {
+      pub panes: std::sync::Mutex<std::collections::HashMap<PaneId, PtyHandle>>,
+  }
+  ```
+- **Locking discipline:** never hold the `panes` lock across a blocking PTY read
+  or a `Channel` send. Clone out what you need (the writer is needed under lock
+  only briefly for `write_pty`).
+- **Reader thread:** one per PTY, `std::thread::spawn`. It reads into a buffer
+  and sends chunks to the `Channel`. It exits when the read returns EOF (master
+  dropped) — which is how `close_pty` stops it. Don't leak threads.
+- **Drop order on close:** kill the child first, then drop the master, then
+  remove from the map. Otherwise you risk zombies or a reader thread spinning.
+- Register exactly the commands you implement in `invoke_handler!` and grant
+  exactly the matching permissions in `capabilities/` (see §15).
+
+---
+
+## 12. Frontend conventions
+
+- TypeScript `strict` mode. No `any` without a written reason.
+- The **layout tree module is pure** and framework-free; the renderer reads the
+  tree and reconciles the DOM. Keep IPC and DOM out of `layout/tree.ts`.
+- One xterm.js instance per leaf. **Reuse** instances where possible across
+  re-renders; don't tear down and recreate a terminal on every layout change
+  (it loses scrollback and flickers). Re-parent the DOM node instead.
+- After any layout change that resizes a pane, call the fit addon and then
+  `resize_pty` with the new `{cols, rows}` — but only if they actually changed.
+- All keyboard handling goes through `keymap/`. UI components don't add their
+  own ad-hoc `keydown` listeners that could fight the prefix engine.
+
+---
+
+## 13. Rendering & performance rules
+
+These exist because "a terminal in a webview" can feel sluggish if done
+naively. Treat them as hard requirements.
+
+- Use the **WebGL renderer addon** (`@xterm/addon-webgl`); fall back to the
+  canvas renderer if WebGL is unavailable. Apply it once per terminal at setup.
+- **Stream in chunks**, write straight to `term.write()` — xterm.js buffers and
+  flushes on its own animation frame. Don't add your own per-keystroke flush
+  loop on top.
+- **Debounce resize** (~30–60 ms) and divider-drag-driven resizes. Sending a
+  PTY resize on every mousemove pixel is wasteful and causes reflow storms.
+- Don't keep terminal scrollback in Rust or in app state — xterm.js owns it.
+- Avoid layout thrash: batch DOM reads/writes when reconciling the split tree.
+- Keep the focused-pane indicator cheap (a 1px divider color change / subtle
+  tint), never a re-layout.
+
+---
+
+## 14. Visual / styling rules
+
+- **Separators are 1px lines.** No borders around panes, no rounded corners, no
+  shadows. The divider is the only thing between two panes.
+- All colors live as **CSS variables** in `styles/theme.css`
+  (`--divider`, `--divider-active`, `--bg`, `--fg`, plus the 16 ANSI colors).
+  Don't hardcode hex values in components.
+- The **active pane** is indicated subtly: a slightly brighter color on the
+  divider adjacent to it, or a faint background tint — *not* a thick highlighted
+  border. When in doubt, less.
+- Inactive panes may be dimmed very slightly; this must be optional and off by
+  default if it hurts readability.
+- Font is a user-configurable monospace family with a sensible mono default. Let
+  xterm.js own font metrics; don't fight it with CSS.
+- The window itself stays minimal — no busy toolbars. A thin/zero title bar is
+  preferred where the platform allows it.
+
+---
+
+## 15. Tauri capabilities / security
+
+Tauri v2 uses an explicit permission model. **Expose only what SplitView
+needs.** In `src-tauri/capabilities/default.json`, allow exactly the custom
+commands (`spawn_pty`, `write_pty`, `resize_pty`, `close_pty`, `list_panes`) and
+nothing broad. Do not enable filesystem/shell plugin permissions the app
+doesn't use. Spawning the shell happens through our own `portable-pty` code, not
+through an over-broad plugin grant. When you add a command, add its permission
+in the same change or the call will be rejected at runtime.
+
+---
+
+## 16. Build, dev, and test commands
+
+```bash
+# install frontend deps
+npm install
+
+# run the app in dev (hot-reloads frontend, rebuilds Rust on change)
+npm run tauri dev
+
+# production bundle
+npm run tauri build
+
+# ---- quality gates (run before finishing any change) ----
+
+# Rust
+cargo fmt --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test  --manifest-path src-tauri/Cargo.toml
+
+# Frontend
+npm run typecheck   # tsc --noEmit
+npm run lint        # eslint
+npm run test        # vitest (layout tree, keymap)
+```
+
+---
+
+## 17. Testing strategy
+
+- **Layout tree (`layout/tree.ts`)** — the highest-value tests. Cover: splitting
+  in both orientations, focus traversal in all four directions, `focus_next`
+  wraparound, moving/swapping panes, closing a pane (sibling promotion + ratio
+  sanity), zoom toggle leaving tree shape intact, ratio clamping. Use `vitest`.
+- **Keymap** — prefix enter/exit, timeout cancel, double-prefix passthrough,
+  binding lookup, config overrides.
+- **Rust PTY (`pty.rs`)** — spawn a trivial command (e.g. `echo hello`), assert
+  the bytes arrive over the channel; test resize doesn't error; test that
+  `close_pty` actually reaps the child and the reader thread exits.
+- **E2E (optional)** — `tauri-driver` / WebDriver smoke test: launch, split,
+  focus-switch, zoom, close. Keep it small; it's a smoke test, not the main
+  coverage.
+
+---
+
+## 18. Non-goals / constraints (do not "helpfully" add these)
+
+- **No PowerShell or cmd.exe default.** SplitView targets a minimal POSIX shell
+  experience. The default shell is the user's `$SHELL` (bash/zsh/fish), not a
+  Windows prompt.
+- **Not a persistent multiplexer server.** Unlike tmux, v1 does not detach /
+  reattach sessions that survive the app closing. Panes live with the window.
+  (Could be revisited later; out of scope now.)
+- **No heavy theming engine, no plugin system, no AI features in the terminal**
+  in v1. Keep the surface small.
+- **No mouse-only features.** Anything you can do with the mouse must also have a
+  keybinding (the reverse is fine).
+- **No full borders / decorative chrome.** See §13–14.
+
+---
+
+## 19. Common tasks ("how do I…")
+
+**Add a new keybinding/action**
+1. Add the action handler in `keymap/actions.ts`.
+2. Register the default binding in the keymap registry.
+3. Expose it as a config-overridable key.
+4. If it mutates layout, go through `layout/tree.ts` (and add a tree test).
+
+**Add a new IPC command**
+1. Implement `#[tauri::command]` in `src-tauri/src/commands.rs`.
+2. Register it in the `invoke_handler!` in `main.rs`.
+3. Grant its permission in `capabilities/default.json`.
+4. Add a typed wrapper in `src/ipc/commands.ts`.
+
+**Add a layout operation**
+1. Implement it as a pure function in `layout/tree.ts`.
+2. Add `vitest` cases including the invariants in §7.
+3. Wire it to a keybinding (§19, first recipe).
+
+**Change the prompt format**
+- Edit the template in config; the per-shell translation lives in
+  `src-tauri/src/shell.rs` (§8). Don't scatter prompt logic elsewhere.
+
+---
+
+## 20. Footguns (things that have bitten this codebase or will)
+
+- **PS1 set via env gets overwritten** by the user's rc file. Inject *after* rc
+  runs (`--rcfile` / `ZDOTDIR`). See §8.
+- **Stealing terminal keys.** If the keymap swallows keys outside prefix mode,
+  vim/emacs/tmux-inside-SplitView break. Only intercept in prefix mode.
+- **JSON-encoding terminal bytes** corrupts non-UTF-8 output. Use byte arrays /
+  the `Channel<Vec<u8>>`. See §10.
+- **Blocking the core process.** PTY reads are blocking — they must be on
+  dedicated threads, never on the async command path or under the state lock.
+- **Zombie children / leaked reader threads.** Kill child → drop master → remove
+  handle, in that order. EOF is what stops the reader thread.
+- **Resize mismatch.** If xterm.js cols/rows and the PTY size drift apart, output
+  wraps wrong and full-screen TUIs corrupt. Always resize both, together.
+- **macOS non-login shell** → missing PATH/Homebrew. Spawn a login shell.
+- **Recreating terminals on layout change** loses scrollback and flickers.
+  Re-parent the existing xterm.js DOM node instead.
+
+---
+
+_When in doubt: keyboard-first, thin lines, real PTYs, low latency. Keep the UI
+out of the way._

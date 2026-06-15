@@ -1,0 +1,35 @@
+# SplitView configuration (example).
+# Copy to the platform config dir, e.g. ~/.config/splitview/config.toml
+
+# Prompt style:
+#   "parrot" (default) — the iconic ParrotOS two-line prompt:
+#                          ┌─[user@host]─[~]
+#                          └──╼ $     (red frame, green commands)
+#   "plain"            — use the `prompt` template below instead.
+promptStyle = "parrot"
+
+# The shell prompt template, used only when promptStyle = "plain".
+# {user} and {cwd} are substituted per shell.
+prompt = "{user} @ {cwd} $ "
+
+# Prefix chord (tmux-style). Press this, then a command key.
+prefix = "C-a"
+
+# Optional shell override. Defaults to $SHELL, then bash -> zsh -> sh.
+# shell = "/bin/zsh"
+
+# Terminal font.
+fontFamily = "ui-monospace, Menlo, Consolas, monospace"
+fontSize = 14
+
+# Ratio change per resize keystroke.
+resizeStep = 0.03
+
+# Keybinding overrides: chord -> action name. Chords use C-/S-/A-/M- prefixes.
+# These override the *after-prefix* bindings. Global (no-prefix) shortcuts also
+# exist out of the box:
+#   Win+O (or Ctrl+Shift+O) -> open_file_dialog : insert a picked file's path
+#   Ctrl+=  / Ctrl+-  / Ctrl+0 -> zoom the terminal font in / out / reset
+#   <prefix> z -> toggle_zoom : maximize the focused pane, then restore
+[keybindings]
+# "C-x" = "close_pane"
