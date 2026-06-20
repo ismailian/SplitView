@@ -111,23 +111,111 @@ fn to_zsh_prompt(template: &str) -> String {
     template.replace("{user}", "%n").replace("{cwd}", "%~")
 }
 
-/// The iconic ParrotOS bash prompt.
+/// Shell setup that installs the ParrotOS prompt, rebuilt on every prompt so the
+/// directory and git branch stay live. The first line is
+/// `┌─[user@host]─[dir]─[branch]`: red frame, white `user@host`, a blue dir that
+/// `__sv_tilde` collapses to `~` (case-insensitively, so Windows `/c/users` paths
+/// still match a `/c/Users` `$HOME`) before `__sv_compact` shortens it to
+/// first-two-plus-last segments, and a yellow branch segment shown only inside a
+/// git repo. The second line is `└──╼ $`, green, with the trailing colour left
+/// un-reset so the typed command is green too.
 ///
-/// Two lines: `┌─[user@host]─[cwd]` then `└──╼ $`. The frame is red, user@host
-/// light, the path blue, and the `$` green. Every escape is wrapped in `\[ \]`
-/// so bash measures the prompt width correctly, and the trailing green is left
-/// un-reset on purpose so the command the user types is green, matching Parrot.
-fn parrot_bash_ps1() -> String {
-    "\\[\\e[1;31m\\]┌─[\\[\\e[1;37m\\]\\u@\\h\\[\\e[1;31m\\]]─[\\[\\e[1;34m\\]\\w\
-     \\[\\e[1;31m\\]]\\n\\[\\e[1;31m\\]└──╼ \\[\\e[1;32m\\]\\$ "
-        .to_string()
+/// bash builds `PS1` from a `PROMPT_COMMAND` hook so the `\[ \]` width markers are
+/// honoured; the dir/branch splice in as plain text between single-quoted,
+/// escape-bearing literals. Raw string => the shell's backslashes need no escaping.
+const PARROT_BASH_SETUP: &str = r##"
+__sv_compact() {
+  local p="$1" first rest second n=0 t="$1"
+  while [ "$t" != "${t#*/}" ]; do t="${t#*/}"; n=$((n+1)); done
+  if [ "$n" -lt 3 ]; then printf '%s' "$p"; return; fi
+  first="${p%%/*}"; rest="${p#*/}"; second="${rest%%/*}"
+  printf '%s/%s/.../%s' "$first" "$second" "${p##*/}"
 }
+__sv_tilde() {
+  local p="$1" pl hl
+  case "$p" in
+    "$HOME") printf '~'; return;;
+    "$HOME"/*) printf '~%s' "${p#"$HOME"}"; return;;
+  esac
+  # Case-insensitive retry: on Windows the cwd can reach the shell as
+  # /c/users/john while $HOME is /c/Users/john, so the exact prefix above
+  # misses. Compare lowercased, but slice the original to keep the real case.
+  pl=$(printf '%s' "$p" | tr 'A-Z' 'a-z')
+  hl=$(printf '%s' "$HOME" | tr 'A-Z' 'a-z')
+  case "$pl" in
+    "$hl") printf '~'; return;;
+    "$hl"/*) printf '~%s' "${p:${#HOME}}"; return;;
+  esac
+  printf '%s' "$p"
+}
+__sv_prompt() {
+  local ec=$? d b bseg
+  d="$(__sv_compact "$(__sv_tilde "$PWD")")"
+  b="$(git symbolic-ref --quiet --short HEAD 2>/dev/null)"
+  if [ -n "$b" ]; then
+    bseg="\[\e[1;31m\]─[\[\e[1;33m\]$b\[\e[1;31m\]]"
+  else
+    bseg=""
+  fi
+  PS1='\[\e[1;31m\]┌─[\[\e[1;37m\]\u@\h\[\e[1;31m\]]─[\[\e[1;34m\]'"$d"'\[\e[1;31m\]]'"$bseg"'\n\[\e[1;31m\]└──╼ \[\e[1;32m\]\$ '
+  return $ec
+}
+case "${PROMPT_COMMAND:-}" in
+  *__sv_prompt*) ;;
+  *) PROMPT_COMMAND="__sv_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+esac
+"##;
 
-/// The iconic ParrotOS zsh prompt. `%F{…}`/`%f` are zsh prompt escapes, so zsh
-/// tracks their (zero) width for us; the layout/colours mirror `parrot_bash_ps1`.
-fn parrot_zsh_prompt() -> String {
-    "%F{red}┌─[%F{white}%n@%m%F{red}]─[%F{blue}%~%F{red}]\n%F{red}└──╼ %F{green}%# ".to_string()
+/// zsh counterpart of [`PARROT_BASH_SETUP`], installed via a `precmd` hook. Uses
+/// `%F{…}` colour escapes (zsh tracks their width), `%n@%m` for user@host and `%#`
+/// for the prompt char; `%` in the dir/branch is doubled so it isn't reinterpreted.
+/// `__sv_tilde` collapses `$HOME` to `~` (case-insensitively) before `__sv_compact`
+/// shortens the path. The newline between the two prompt lines is literal.
+const PARROT_ZSH_SETUP: &str = r##"
+__sv_compact() {
+  local p="$1" first rest second n=0 t="$1"
+  while [ "$t" != "${t#*/}" ]; do t="${t#*/}"; n=$((n+1)); done
+  if [ "$n" -lt 3 ]; then printf '%s' "$p"; return; fi
+  first="${p%%/*}"; rest="${p#*/}"; second="${rest%%/*}"
+  printf '%s/%s/.../%s' "$first" "$second" "${p##*/}"
 }
+__sv_tilde() {
+  local p="$1" pl hl
+  case "$p" in
+    "$HOME") printf '~'; return;;
+    "$HOME"/*) printf '~%s' "${p#"$HOME"}"; return;;
+  esac
+  # Case-insensitive retry: on Windows the cwd can reach the shell as
+  # /c/users/john while $HOME is /c/Users/john, so the exact prefix above
+  # misses. Compare lowercased, but slice the original to keep the real case.
+  pl=$(printf '%s' "$p" | tr 'A-Z' 'a-z')
+  hl=$(printf '%s' "$HOME" | tr 'A-Z' 'a-z')
+  case "$pl" in
+    "$hl") printf '~'; return;;
+    "$hl"/*) printf '~%s' "${p:${#HOME}}"; return;;
+  esac
+  printf '%s' "$p"
+}
+__sv_prompt() {
+  local ec=$? d b bseg
+  d="$(__sv_compact "$(__sv_tilde "$PWD")")"
+  d=${d//\%/%%}
+  b="$(git symbolic-ref --quiet --short HEAD 2>/dev/null)"
+  if [ -n "$b" ]; then
+    b=${b//\%/%%}
+    bseg="%F{red}─[%F{yellow}${b}%F{red}]"
+  else
+    bseg=""
+  fi
+  PROMPT="%F{red}┌─[%F{white}%n@%m%F{red}]─[%F{blue}${d}%F{red}]${bseg}
+%F{red}└──╼ %F{green}%# "
+  return $ec
+}
+typeset -ga precmd_functions
+if [[ -z "${precmd_functions[(r)__sv_prompt]}" ]]; then
+  precmd_functions+=(__sv_prompt)
+fi
+"##;
 
 fn unique_path(prefix: &str) -> PathBuf {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -138,33 +226,37 @@ fn unique_path(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{}-{}", std::process::id(), nanos))
 }
 
-/// Temp rcfile that sources the user's real bash config, then sets `PS1` last.
-fn bash_rcfile(ps1: &str) -> Result<PathBuf> {
+/// Temp rcfile that sources the user's real bash config, then appends the prompt
+/// `setup` shell code last (a static `PS1=…` for the plain style, or the dynamic
+/// ParrotOS prompt builder in [`PARROT_BASH_SETUP`]).
+fn bash_rcfile(setup: &str) -> Result<PathBuf> {
     let path = unique_path("splitview-bashrc");
     // Source login profiles first so PATH/Homebrew are populated (important on
     // macOS where a non-login shell has a broken environment, CLAUDE.md §8),
-    // then the interactive rc, then override only the prompt.
+    // then the interactive rc, then set up the prompt last.
     let contents = format!(
         "# SplitView generated rcfile — do not edit\n\
          if [ -f \"$HOME/.bash_profile\" ]; then . \"$HOME/.bash_profile\";\n\
          elif [ -f \"$HOME/.bash_login\" ]; then . \"$HOME/.bash_login\";\n\
          elif [ -f \"$HOME/.profile\" ]; then . \"$HOME/.profile\"; fi\n\
          [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"\n\
-         PS1='{ps1}'\n"
+         {setup}"
     );
     fs::write(&path, contents)?;
     Ok(path)
 }
 
-/// Temp `ZDOTDIR` whose `.zshrc` sources the real one, then sets `PROMPT` last.
-fn zsh_zdotdir(prompt: &str) -> Result<PathBuf> {
+/// Temp `ZDOTDIR` whose `.zshrc` sources the real one, then appends the prompt
+/// `setup` shell code last (a static `PROMPT=…` for the plain style, or the
+/// dynamic ParrotOS prompt builder in [`PARROT_ZSH_SETUP`]).
+fn zsh_zdotdir(setup: &str) -> Result<PathBuf> {
     let dir = unique_path("splitview-zdotdir");
     fs::create_dir_all(&dir)?;
     let contents = format!(
         "# SplitView generated .zshrc — do not edit\n\
          [ -f \"${{HOME}}/.zprofile\" ] && source \"${{HOME}}/.zprofile\"\n\
          [ -f \"${{HOME}}/.zshrc\" ] && source \"${{HOME}}/.zshrc\"\n\
-         PROMPT='{prompt}'\n"
+         {setup}"
     );
     fs::write(dir.join(".zshrc"), contents)?;
     Ok(dir)
@@ -183,19 +275,19 @@ pub fn build_command(cfg: &ShellConfig) -> Result<CommandBuilder> {
 
     match kind {
         ShellKind::Bash => {
-            let ps1 = match cfg.style {
-                PromptStyle::Parrot => parrot_bash_ps1(),
-                PromptStyle::Plain => to_bash_ps1(&cfg.prompt),
+            let setup = match cfg.style {
+                PromptStyle::Parrot => PARROT_BASH_SETUP.to_string(),
+                PromptStyle::Plain => format!("PS1='{}'\n", to_bash_ps1(&cfg.prompt)),
             };
-            let rc = bash_rcfile(&ps1)?;
+            let rc = bash_rcfile(&setup)?;
             cmd.args(["--rcfile", &rc.to_string_lossy(), "-i"]);
         }
         ShellKind::Zsh => {
-            let prompt = match cfg.style {
-                PromptStyle::Parrot => parrot_zsh_prompt(),
-                PromptStyle::Plain => to_zsh_prompt(&cfg.prompt),
+            let setup = match cfg.style {
+                PromptStyle::Parrot => PARROT_ZSH_SETUP.to_string(),
+                PromptStyle::Plain => format!("PROMPT='{}'\n", to_zsh_prompt(&cfg.prompt)),
             };
-            let zdot = zsh_zdotdir(&prompt)?;
+            let zdot = zsh_zdotdir(&setup)?;
             cmd.env("ZDOTDIR", &zdot);
             cmd.arg("-i");
         }
@@ -250,21 +342,28 @@ mod tests {
     }
 
     #[test]
-    fn parrot_prompts_carry_frame_and_colours() {
-        let bash = parrot_bash_ps1();
-        // Box frame, the bash user/cwd tokens, and a green (1;32) input colour.
-        assert!(bash.contains("┌─["));
-        assert!(bash.contains("└──╼"));
-        assert!(bash.contains("\\u@\\h"));
-        assert!(bash.contains("\\w"));
-        assert!(bash.contains("1;32"));
-        // Escapes are wrapped for bash width tracking, and there is no stray space
-        // collapsed by the source line-continuation.
-        assert!(bash.contains("\\w\\[\\e[1;31m\\]]"));
-
-        let zsh = parrot_zsh_prompt();
-        assert!(zsh.contains("┌─["));
-        assert!(zsh.contains("%n@%m"));
-        assert!(zsh.contains("%F{green}"));
+    fn parrot_setup_compacts_dir_and_shows_branch() {
+        // Rebuilt each prompt: compacts the cwd, adds a branch segment only in a
+        // repo, and keeps the red frame + box characters.
+        for setup in [PARROT_BASH_SETUP, PARROT_ZSH_SETUP] {
+            assert!(setup.contains("__sv_compact"));
+            assert!(setup.contains("/.../")); // the collapsed-middle marker
+                                              // Home is collapsed to ~ through __sv_tilde (case-insensitive for
+                                              // Windows), not a raw case-sensitive ${PWD/#$HOME/~} substitution.
+            assert!(setup.contains("__sv_tilde"));
+            assert!(setup.contains("tr 'A-Z' 'a-z'"));
+            assert!(!setup.contains("PWD/#"));
+            assert!(setup.contains("git symbolic-ref --quiet --short HEAD"));
+            assert!(setup.contains("┌─["));
+            assert!(setup.contains("└──╼"));
+            assert!(setup.contains("return $ec"));
+        }
+        // bash uses \[ \] width markers + PROMPT_COMMAND; zsh uses %F + precmd.
+        assert!(PARROT_BASH_SETUP.contains("\\u@\\h"));
+        assert!(PARROT_BASH_SETUP.contains("1;32")); // green typed input
+        assert!(PARROT_BASH_SETUP.contains("PROMPT_COMMAND"));
+        assert!(PARROT_ZSH_SETUP.contains("%n@%m"));
+        assert!(PARROT_ZSH_SETUP.contains("%F{green}"));
+        assert!(PARROT_ZSH_SETUP.contains("precmd_functions+=(__sv_prompt)"));
     }
 }

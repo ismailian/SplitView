@@ -99,7 +99,21 @@ class App implements AppActions {
     if (this.fontSize !== this.config.fontSize) pane.setFontSize(this.fontSize);
     const id = pane.id;
     if (id) this.panes.set(id, pane);
+    // Mouse clicks focus a pane's terminal directly; mirror that into the layout
+    // so the next split/move/zoom acts on the pane the user is actually in.
+    pane.onFocus = () => this.onPaneFocused(id);
     return pane;
+  }
+
+  /**
+   * Sync `layout.focused` to a pane that gained DOM focus (e.g. a mouse click).
+   * Re-renders to move the focus tint/divider, but does not call `focus()` again
+   * — the pane already has DOM focus, so re-focusing would be redundant.
+   */
+  private onPaneFocused(id: string | null): void {
+    if (!id || id === this.layout.focused || !this.panes.has(id)) return;
+    this.layout = { ...this.layout, focused: id };
+    this.render();
   }
 
   // --- key handling ------------------------------------------------------

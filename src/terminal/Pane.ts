@@ -20,6 +20,13 @@ import {
 
 const RESIZE_DEBOUNCE_MS = 40;
 
+/**
+ * What Ctrl+Shift+Enter sends: Esc + CR (the Meta/Alt+Enter sequence). Apps that
+ * support multi-line input (readline-/Ink-based REPLs) treat this as "insert a
+ * newline" rather than "submit", which a plain CR would do (CLAUDE.md §1).
+ */
+const CTRL_SHIFT_ENTER = encode("\x1b\r");
+
 export class Pane {
   /** Stable wrapper element; the renderer moves this around the DOM. */
   readonly el: HTMLDivElement;
@@ -30,6 +37,12 @@ export class Pane {
   private lastCols = 0;
   private lastRows = 0;
   private disposed = false;
+  /**
+   * Called when this pane gains focus (mouse click or programmatic). Lets the
+   * controller keep `layout.focused` in sync with the terminal that actually
+   * has DOM focus, so a subsequent split targets the right pane.
+   */
+  onFocus: (() => void) | null = null;
 
   private constructor(el: HTMLDivElement, term: Terminal, fit: FitAddon) {
     this.el = el;
@@ -44,6 +57,33 @@ export class Pane {
 
     const { term, fit } = createTerminal(el, cfg);
     const pane = new Pane(el, term, fit);
+
+    // xterm focuses its helper textarea on click; that `focusin` bubbles to the
+    // wrapper. Forward it so the controller can sync `layout.focused` to the
+    // pane the user actually clicked into (CLAUDE.md §9 keyboard-first, but the
+    // mouse is still a valid way to pick the focused pane).
+    el.addEventListener("focusin", () => {
+      if (!pane.disposed) pane.onFocus?.();
+    });
+
+    // Intercept two keys before xterm's defaults (CLAUDE.md §1):
+    //  - Ctrl+Shift+Enter -> Esc+Enter, so multi-line apps insert a newline
+    //    instead of submitting (xterm would otherwise send a plain CR).
+    //  - Ctrl+V -> return false so the webview's native paste fires on xterm's
+    //    helper textarea, which xterm turns into a correct bracketed paste.
+    //    Otherwise xterm sends the literal-next control byte and nothing pastes.
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== "keydown") return true;
+      const plainCtrl = ev.ctrlKey && !ev.altKey && !ev.metaKey;
+      if (plainCtrl && ev.shiftKey && ev.key === "Enter") {
+        pane.sendBytes(CTRL_SHIFT_ENTER);
+        return false;
+      }
+      if (plainCtrl && !ev.shiftKey && ev.key.toLowerCase() === "v") {
+        return false; // allow the native paste
+      }
+      return true;
+    });
 
     // Size to the container before spawning so the PTY starts at the right size.
     pane.safeFit();
