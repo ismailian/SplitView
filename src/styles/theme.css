@@ -55,8 +55,9 @@
 
   --font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* Divider thickness. Kept at hairline width. */
-  --divider-size: 1px;
+  /* Divider thickness. A hair above hairline (2px) for visibility; still a
+   * thin line, never a border (CLAUDE.md §14). Overridable from Settings. */
+  --divider-size: 2px;
 }
 
 * {

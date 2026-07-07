@@ -12,7 +12,7 @@ use tauri::{AppHandle, State};
 
 use crate::error::{Error, Result};
 use crate::pty;
-use crate::shell::{PromptStyle, ShellConfig};
+use crate::shell::{Alias, PromptInfo, PromptStyle, ShellConfig};
 use crate::state::{AppState, PaneId};
 
 /// Options for spawning a pane's shell. Field names are camelCase to match the
@@ -27,6 +27,31 @@ pub struct SpawnOpts {
     pub prompt: Option<String>,
     /// `"parrot"` (default) or `"plain"`; selects the injected prompt.
     pub prompt_style: Option<String>,
+    /// User-defined aliases to inject into the spawned shell.
+    pub aliases: Option<Vec<AliasOpt>>,
+    /// Which prompt info segments to show. Defaults to the signature look.
+    pub prompt_info: Option<PromptInfoOpt>,
+    /// Banner printed once before the first prompt.
+    pub banner: Option<String>,
+}
+
+/// One `{ name, command }` alias from the frontend Settings.
+#[derive(Debug, serde::Deserialize)]
+pub struct AliasOpt {
+    pub name: String,
+    pub command: String,
+}
+
+/// Prompt info toggles from the frontend Settings (camelCase on the wire).
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptInfoOpt {
+    pub user: bool,
+    pub host: bool,
+    pub dir: bool,
+    pub branch: bool,
+    pub time: bool,
+    pub exit_status: bool,
 }
 
 fn next_pane_id() -> PaneId {
@@ -45,6 +70,26 @@ pub fn spawn_pty(
 ) -> Result<PaneId> {
     let cols = opts.cols.unwrap_or(80);
     let rows = opts.rows.unwrap_or(24);
+    let aliases = opts
+        .aliases
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| Alias {
+            name: a.name,
+            command: a.command,
+        })
+        .collect();
+    let prompt_info = opts
+        .prompt_info
+        .map(|p| PromptInfo {
+            user: p.user,
+            host: p.host,
+            dir: p.dir,
+            branch: p.branch,
+            time: p.time,
+            exit_status: p.exit_status,
+        })
+        .unwrap_or_default();
     let shell_cfg = ShellConfig {
         program: opts.shell,
         cwd: opts.cwd,
@@ -52,6 +97,9 @@ pub fn spawn_pty(
             .prompt
             .unwrap_or_else(|| "{user} @ {cwd} $ ".to_string()),
         style: PromptStyle::from_opt(opts.prompt_style.as_deref()),
+        aliases,
+        prompt_info,
+        banner: opts.banner.unwrap_or_default(),
     };
 
     // Assign the id up front so the reader thread can name this pane in the

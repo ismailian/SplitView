@@ -31,5 +31,10 @@ resizeStep = 0.03
 #   Win+O (or Ctrl+Shift+O) -> open_file_dialog : insert a picked file's path
 #   Ctrl+=  / Ctrl+-  / Ctrl+0 -> zoom the terminal font in / out / reset
 #   <prefix> z -> toggle_zoom : maximize the focused pane, then restore
+#   <prefix> , -> open_settings : open the Settings window. You can also open it
+#                 from any terminal by running:  splitview settings
+#
+# Settings edited in that window (display colours/fonts, aliases, prompt-info
+# toggles, and the banner) are saved by the app itself, separate from this file.
 [keybindings]
 # "C-x" = "close_pane"

@@ -9,6 +9,22 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+/** A user-defined alias: typing `name` in the shell runs `command`. */
+export interface Alias {
+  name: string;
+  command: string;
+}
+
+/** Which informational segments the prompt's first line shows. */
+export interface PromptInfo {
+  user: boolean;
+  host: boolean;
+  dir: boolean;
+  branch: boolean;
+  time: boolean;
+  exitStatus: boolean;
+}
+
 export interface SpawnOpts {
   cols?: number;
   rows?: number;
@@ -17,6 +33,12 @@ export interface SpawnOpts {
   prompt?: string;
   /** `"parrot"` (default) or `"plain"`; selects the injected prompt. */
   promptStyle?: "parrot" | "plain";
+  /** Aliases injected into the spawned shell. */
+  aliases?: Alias[];
+  /** Prompt info toggles (user/host/dir/branch/time/exit-status). */
+  promptInfo?: PromptInfo;
+  /** Banner printed once before the first prompt. */
+  banner?: string;
 }
 
 export type PaneId = string;

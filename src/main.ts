@@ -9,6 +9,7 @@
 
 import "@xterm/xterm/css/xterm.css";
 import "./styles/theme.css";
+import "./styles/settings.css";
 
 import {
   type Layout,
@@ -35,8 +36,19 @@ import {
   type KeyEvent,
   type KeymapConfig,
 } from "./keymap/keymap";
-import { dispatchAction, type AppActions } from "./keymap/actions";
+import {
+  dispatchAction,
+  ACTION_INFO,
+  type AppActions,
+} from "./keymap/actions";
 import { defaultConfig, type Config } from "./config/config";
+import {
+  loadSettings,
+  saveSettings,
+  applyDisplay,
+  type Settings,
+} from "./settings/settings";
+import { SettingsWindow } from "./settings/SettingsWindow";
 
 /** Font-size bounds for the zoom-in/out actions, in px. */
 const FONT_MIN = 6;
@@ -46,7 +58,9 @@ class App implements AppActions {
   private layout: Layout = emptyLayout();
   private readonly panes = new Map<string, Pane>();
   private config: Config;
+  private settings: Settings;
   private keymap: Keymap;
+  private readonly settingsWindow: SettingsWindow;
   private nextSeq = 0;
   /** Current terminal font size (zoom level); starts at the configured size. */
   private fontSize: number;
@@ -54,10 +68,22 @@ class App implements AppActions {
   constructor(
     private readonly container: HTMLElement,
     config: Config,
+    settings: Settings,
   ) {
     this.config = config;
-    this.fontSize = config.fontSize;
+    this.settings = settings;
+    this.fontSize = settings.display.fontSize;
     this.keymap = new Keymap(this.keymapConfig());
+    this.settingsWindow = new SettingsWindow({
+      getSettings: () => this.settings,
+      onChange: (next) => this.onSettingsChanged(next),
+      keymap: {
+        prefix: this.config.prefix || DEFAULT_KEYMAP.prefix,
+        prefixBindings: this.keymapConfig().prefixBindings,
+        globalBindings: DEFAULT_KEYMAP.globalBindings ?? {},
+      },
+      actionInfo: ACTION_INFO,
+    });
   }
 
   private keymapConfig(): KeymapConfig {
@@ -93,16 +119,33 @@ class App implements AppActions {
     return `pane-local-${this.nextSeq++}`;
   }
 
-  private async newPane(): Promise<Pane> {
-    const pane = await Pane.create(this.config);
-    // Keep a newly split pane at the current zoom level, not the configured one.
-    if (this.fontSize !== this.config.fontSize) pane.setFontSize(this.fontSize);
+  private async newPane(cwd?: string): Promise<Pane> {
+    const pane = await Pane.create(this.effectiveConfig(), {
+      cwd,
+      aliases: this.settings.aliases,
+      banner: this.settings.banner,
+      promptInfo: this.settings.promptInfo,
+    });
+    // Keep a newly split pane at the current zoom level, not the base size.
+    if (this.fontSize !== this.settings.display.fontSize)
+      pane.setFontSize(this.fontSize);
     const id = pane.id;
     if (id) this.panes.set(id, pane);
     // Mouse clicks focus a pane's terminal directly; mirror that into the layout
     // so the next split/move/zoom acts on the pane the user is actually in.
     pane.onFocus = () => this.onPaneFocused(id);
+    // The injected `splitview` shell command reaches us as an app command.
+    pane.onAppCommand = (cmd) => this.onAppCommand(cmd);
     return pane;
+  }
+
+  /** Base config with the live Display font folded in (CLAUDE.md §12). */
+  private effectiveConfig(): Config {
+    return {
+      ...this.config,
+      fontFamily: this.settings.display.fontFamily,
+      fontSize: this.settings.display.fontSize,
+    };
   }
 
   /**
@@ -119,6 +162,17 @@ class App implements AppActions {
   // --- key handling ------------------------------------------------------
 
   private onKeyDown = (ev: KeyboardEvent): void => {
+    // While Settings is open, the keymap must not fire — keys belong to the
+    // window's inputs. Escape closes it and returns focus to the terminal.
+    if (this.settingsWindow.isOpen) {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        this.settingsWindow.close();
+        this.focusedPane()?.focus();
+      }
+      return;
+    }
+
     const desc: KeyEvent = {
       key: ev.key,
       ctrlKey: ev.ctrlKey,
@@ -171,7 +225,10 @@ class App implements AppActions {
   // --- AppActions --------------------------------------------------------
 
   split(dir: "down" | "right"): void {
-    void this.newPane().then((pane) => {
+    // Inherit the focused pane's working directory so the new shell opens where
+    // the user is (reported by the shell via OSC 7; see Pane).
+    const cwd = this.focusedPane()?.cwd ?? undefined;
+    void this.newPane(cwd).then((pane) => {
       const id = pane.id;
       if (!id) return;
       this.commit(splitFocused(this.layout, dir, id));
@@ -239,6 +296,36 @@ class App implements AppActions {
     this.render();
   }
 
+  /** Open the Settings window (<prefix> , or `splitview settings`). */
+  openSettings(): void {
+    this.settingsWindow.open();
+  }
+
+  /**
+   * Handle an app command from the terminal: the injected `splitview` shell
+   * function emits a private OSC sequence carrying its arguments. Only the first
+   * word is significant; unknown commands are ignored.
+   */
+  private onAppCommand(cmd: string): void {
+    const word = cmd.trim().toLowerCase().split(/\s+/)[0];
+    if (word === "settings" || word === "config") this.settingsWindow.open();
+    else if (word === "reload") this.reloadConfig();
+  }
+
+  /**
+   * Persist edited settings and apply the display changes live: update the CSS
+   * variables, then re-theme every pane (CLAUDE.md §14). Alias/banner/prompt-info
+   * changes take effect on the next new terminal.
+   */
+  private onSettingsChanged(next: Settings): void {
+    this.settings = next;
+    saveSettings(next);
+    applyDisplay(next.display);
+    this.fontSize = next.display.fontSize;
+    for (const pane of this.panes.values())
+      pane.applyDisplay(next.display.fontFamily, next.display.fontSize);
+  }
+
   /**
    * Win+O: open the native file picker and insert the chosen path into the
    * focused pane (shell-quoted, no trailing newline — the user can edit/run it).
@@ -295,11 +382,11 @@ async function bootstrap(): Promise<void> {
   const container = document.getElementById("app");
   if (!container) throw new Error("missing #app container");
   const config = defaultConfig();
-  document.documentElement.style.setProperty(
-    "--font-family",
-    config.fontFamily,
-  );
-  const app = new App(container, config);
+  const settings = loadSettings();
+  // Apply the saved display settings (colours, font, divider) before the first
+  // pane mounts so it renders with the right theme from the start.
+  applyDisplay(settings.display);
+  const app = new App(container, config, settings);
   await app.start();
 }
 

@@ -8,7 +8,7 @@
 
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
-import { createTerminal } from "./renderer";
+import { createTerminal, themeFromCss } from "./renderer";
 import type { Config } from "../config/config";
 import {
   spawnPty,
@@ -16,7 +16,21 @@ import {
   resizePty,
   closePty,
   type PaneId,
+  type Alias,
+  type PromptInfo,
 } from "../ipc/commands";
+
+/** Per-spawn extras layered on top of the base `Config` (CLAUDE.md §4). */
+export interface SpawnExtras {
+  /** Working directory for the new shell (inherited from a split). */
+  cwd?: string;
+  /** Aliases to inject into the shell. */
+  aliases?: Alias[];
+  /** Text shown at the top of the pane before the first prompt. */
+  banner?: string;
+  /** Prompt info toggles. */
+  promptInfo?: PromptInfo;
+}
 
 const RESIZE_DEBOUNCE_MS = 40;
 
@@ -43,6 +57,14 @@ export class Pane {
    * has DOM focus, so a subsequent split targets the right pane.
    */
   onFocus: (() => void) | null = null;
+  /**
+   * Called when the shell runs the injected `splitview` app command, which
+   * emits a private OSC sequence carrying its arguments (e.g. `"settings"`).
+   * Lets the user drive SplitView from the terminal (CLAUDE.md §1).
+   */
+  onAppCommand: ((cmd: string) => void) | null = null;
+  /** Latest working directory reported by the shell via OSC 7, if any. */
+  private currentCwd: string | null = null;
 
   private constructor(el: HTMLDivElement, term: Terminal, fit: FitAddon) {
     this.el = el;
@@ -51,12 +73,25 @@ export class Pane {
   }
 
   /** Create a pane, mount xterm.js, and spawn its PTY. */
-  static async create(cfg: Config, cwd?: string): Promise<Pane> {
+  static async create(cfg: Config, spawn: SpawnExtras = {}): Promise<Pane> {
     const el = document.createElement("div");
     el.className = "pane";
 
     const { term, fit } = createTerminal(el, cfg);
     const pane = new Pane(el, term, fit);
+
+    // OSC 7: the shell reports its cwd each prompt so a new split inherits it.
+    // OSC 5170: SplitView's private app-command channel — the injected
+    // `splitview` shell function emits it (e.g. `splitview settings`).
+    term.parser.registerOscHandler(7, (data) => {
+      const p = parseOsc7(data);
+      if (p) pane.currentCwd = p;
+      return true;
+    });
+    term.parser.registerOscHandler(5170, (data) => {
+      if (!pane.disposed) pane.onAppCommand?.(data.trim());
+      return true;
+    });
 
     // xterm focuses its helper textarea on click; that `focusin` bubbles to the
     // wrapper. Forward it so the controller can sync `layout.focused` to the
@@ -95,10 +130,13 @@ export class Pane {
       {
         cols,
         rows,
-        cwd,
+        cwd: spawn.cwd,
         shell: cfg.shell,
         prompt: cfg.prompt,
         promptStyle: cfg.promptStyle,
+        aliases: spawn.aliases,
+        promptInfo: spawn.promptInfo,
+        banner: spawn.banner,
       },
       (bytes) => {
         if (!pane.disposed) term.write(bytes);
@@ -119,6 +157,11 @@ export class Pane {
     return this.paneId;
   }
 
+  /** Latest cwd reported by the shell (OSC 7), for inheriting on split. */
+  get cwd(): string | null {
+    return this.currentCwd;
+  }
+
   /** Send raw bytes to the PTY (used for double-prefix passthrough). */
   sendBytes(bytes: Uint8Array): void {
     if (this.paneId) void writePty(this.paneId, bytes);
@@ -136,6 +179,19 @@ export class Pane {
   setFontSize(px: number): void {
     if (this.disposed) return;
     this.term.options.fontSize = px;
+    this.refit();
+  }
+
+  /**
+   * Re-read the theme from the CSS variables and apply the font family/size,
+   * then refit. Called when the user changes Display settings so live panes
+   * update without being recreated (CLAUDE.md §12, §14).
+   */
+  applyDisplay(fontFamily: string, fontSize: number): void {
+    if (this.disposed) return;
+    this.term.options.theme = themeFromCss();
+    this.term.options.fontFamily = fontFamily;
+    this.term.options.fontSize = fontSize;
     this.refit();
   }
 
@@ -185,4 +241,23 @@ export class Pane {
 
 function encode(s: string): Uint8Array {
   return new TextEncoder().encode(s);
+}
+
+/**
+ * Parse an OSC 7 payload (`file://host/path`) into the bare path. The host is
+ * discarded; the path is percent-decoded best-effort. Returns null if it isn't
+ * a `file://` URL. On Windows the path arrives in msys form (`/c/Users/...`);
+ * the backend converts it to a native path when spawning the next pane.
+ */
+function parseOsc7(data: string): string | null {
+  if (!data.startsWith("file://")) return null;
+  const rest = data.slice("file://".length);
+  const slash = rest.indexOf("/");
+  if (slash < 0) return null;
+  const path = rest.slice(slash);
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path; // malformed escape; use the raw path
+  }
 }

@@ -25,7 +25,40 @@ export interface AppActions {
   zoomIn(): void;
   zoomOut(): void;
   zoomReset(): void;
+  /** Open the Settings window. */
+  openSettings(): void;
 }
+
+/** Human-readable label + grouping for each action, shown in Settings. */
+export const ACTION_INFO: Record<string, { label: string; category: string }> = {
+  split_down: { label: "Split horizontally (stacked)", category: "Panes" },
+  split_right: { label: "Split vertically (side by side)", category: "Panes" },
+  toggle_zoom: { label: "Toggle zoom (maximize pane)", category: "Panes" },
+  close_pane: { label: "Close focused pane", category: "Panes" },
+
+  focus_left: { label: "Focus pane left", category: "Focus" },
+  focus_down: { label: "Focus pane down", category: "Focus" },
+  focus_up: { label: "Focus pane up", category: "Focus" },
+  focus_right: { label: "Focus pane right", category: "Focus" },
+  focus_next: { label: "Cycle focus to next pane", category: "Focus" },
+
+  move_left: { label: "Move pane left", category: "Move / Resize" },
+  move_down: { label: "Move pane down", category: "Move / Resize" },
+  move_up: { label: "Move pane up", category: "Move / Resize" },
+  move_right: { label: "Move pane right", category: "Move / Resize" },
+  resize_left: { label: "Resize pane left", category: "Move / Resize" },
+  resize_down: { label: "Resize pane down", category: "Move / Resize" },
+  resize_up: { label: "Resize pane up", category: "Move / Resize" },
+  resize_right: { label: "Resize pane right", category: "Move / Resize" },
+
+  zoom_in: { label: "Increase font size", category: "Font" },
+  zoom_out: { label: "Decrease font size", category: "Font" },
+  zoom_reset: { label: "Reset font size", category: "Font" },
+
+  open_file_dialog: { label: "Insert file path (picker)", category: "App" },
+  open_settings: { label: "Open Settings", category: "App" },
+  reload_config: { label: "Reload config", category: "App" },
+};
 
 export type ActionHandler = (a: AppActions) => void;
 
@@ -57,6 +90,7 @@ export const actionHandlers: Record<string, ActionHandler> = {
   zoom_in: (a) => a.zoomIn(),
   zoom_out: (a) => a.zoomOut(),
   zoom_reset: (a) => a.zoomReset(),
+  open_settings: (a) => a.openSettings(),
 };
 
 /** Dispatch an action by name; unknown names are ignored. */

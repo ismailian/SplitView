@@ -29,6 +29,51 @@ pub struct ShellConfig {
     pub prompt: String,
     /// Which prompt to inject (the ParrotOS look, or the plain template).
     pub style: PromptStyle,
+    /// User-defined aliases, injected into the spawned shell as real `alias`
+    /// definitions so typing the name runs the underlying command.
+    pub aliases: Vec<Alias>,
+    /// Which informational segments the prompt shows (user/host/dir/branch/…).
+    pub prompt_info: PromptInfo,
+    /// Banner printed once at shell startup, before the first prompt. Empty for
+    /// none. `\e[…m` escapes are honoured so banners can be coloured.
+    pub banner: String,
+}
+
+/// A user-defined shell alias from Settings. `command` is single-quote-escaped
+/// when written into the rcfile, so arbitrary commands are safe.
+#[derive(Clone, Debug)]
+pub struct Alias {
+    pub name: String,
+    pub command: String,
+}
+
+/// Which informational segments the ParrotOS prompt's first line shows. Off
+/// segments are simply omitted. These are surfaced as toggles in Settings and
+/// passed through to the shell as `SV_SHOW_*` environment variables that
+/// `__sv_prompt` reads each time it rebuilds the prompt.
+#[derive(Clone, Copy, Debug)]
+pub struct PromptInfo {
+    pub user: bool,
+    pub host: bool,
+    pub dir: bool,
+    pub branch: bool,
+    pub time: bool,
+    pub exit_status: bool,
+}
+
+impl Default for PromptInfo {
+    /// The signature look: user@host, directory and branch on; clock and
+    /// exit-status off. Matches the prompt before toggles existed.
+    fn default() -> Self {
+        Self {
+            user: true,
+            host: true,
+            dir: true,
+            branch: true,
+            time: false,
+            exit_status: false,
+        }
+    }
 }
 
 /// Which prompt SplitView injects into the spawned shell.
@@ -149,15 +194,29 @@ __sv_tilde() {
   printf '%s' "$p"
 }
 __sv_prompt() {
-  local ec=$? d b bseg
-  d="$(__sv_compact "$(__sv_tilde "$PWD")")"
-  b="$(git symbolic-ref --quiet --short HEAD 2>/dev/null)"
-  if [ -n "$b" ]; then
-    bseg="\[\e[1;31m\]─[\[\e[1;33m\]$b\[\e[1;31m\]]"
-  else
-    bseg=""
+  local ec=$? d b line userhost
+  line='\[\e[1;31m\]┌'
+  if [ "${SV_SHOW_USER:-1}" = 1 ] || [ "${SV_SHOW_HOST:-1}" = 1 ]; then
+    if [ "${SV_SHOW_USER:-1}" = 1 ] && [ "${SV_SHOW_HOST:-1}" = 1 ]; then userhost='\u@\h';
+    elif [ "${SV_SHOW_USER:-1}" = 1 ]; then userhost='\u';
+    else userhost='\h'; fi
+    line=$line'─[\[\e[1;37m\]'"$userhost"'\[\e[1;31m\]]'
   fi
-  PS1='\[\e[1;31m\]┌─[\[\e[1;37m\]\u@\h\[\e[1;31m\]]─[\[\e[1;34m\]'"$d"'\[\e[1;31m\]]'"$bseg"'\n\[\e[1;31m\]└──╼ \[\e[1;32m\]\$ '
+  if [ "${SV_SHOW_DIR:-1}" = 1 ]; then
+    d="$(__sv_compact "$(__sv_tilde "$PWD")")"
+    line=$line'─[\[\e[1;34m\]'"$d"'\[\e[1;31m\]]'
+  fi
+  if [ "${SV_SHOW_BRANCH:-1}" = 1 ]; then
+    b="$(git symbolic-ref --quiet --short HEAD 2>/dev/null)"
+    if [ -n "$b" ]; then line=$line'─[\[\e[1;33m\]'"$b"'\[\e[1;31m\]]'; fi
+  fi
+  if [ "${SV_SHOW_TIME:-0}" = 1 ]; then
+    line=$line'─[\[\e[1;36m\]\t\[\e[1;31m\]]'
+  fi
+  if [ "${SV_SHOW_EXIT:-0}" = 1 ] && [ "$ec" != 0 ]; then
+    line=$line'─[\[\e[1;31m\]✗ '"$ec"'\[\e[1;31m\]]'
+  fi
+  PS1=$line'\n\[\e[1;31m\]└──╼ \[\e[1;32m\]\$ '
   return $ec
 }
 case "${PROMPT_COMMAND:-}" in
@@ -197,17 +256,30 @@ __sv_tilde() {
   printf '%s' "$p"
 }
 __sv_prompt() {
-  local ec=$? d b bseg
-  d="$(__sv_compact "$(__sv_tilde "$PWD")")"
-  d=${d//\%/%%}
-  b="$(git symbolic-ref --quiet --short HEAD 2>/dev/null)"
-  if [ -n "$b" ]; then
-    b=${b//\%/%%}
-    bseg="%F{red}─[%F{yellow}${b}%F{red}]"
-  else
-    bseg=""
+  local ec=$? d b line userhost
+  line='%F{red}┌'
+  if [[ "${SV_SHOW_USER:-1}" == 1 || "${SV_SHOW_HOST:-1}" == 1 ]]; then
+    if [[ "${SV_SHOW_USER:-1}" == 1 && "${SV_SHOW_HOST:-1}" == 1 ]]; then userhost='%n@%m';
+    elif [[ "${SV_SHOW_USER:-1}" == 1 ]]; then userhost='%n';
+    else userhost='%m'; fi
+    line="${line}─[%F{white}${userhost}%F{red}]"
   fi
-  PROMPT="%F{red}┌─[%F{white}%n@%m%F{red}]─[%F{blue}${d}%F{red}]${bseg}
+  if [[ "${SV_SHOW_DIR:-1}" == 1 ]]; then
+    d="$(__sv_compact "$(__sv_tilde "$PWD")")"
+    d=${d//\%/%%}
+    line="${line}─[%F{blue}${d}%F{red}]"
+  fi
+  if [[ "${SV_SHOW_BRANCH:-1}" == 1 ]]; then
+    b="$(git symbolic-ref --quiet --short HEAD 2>/dev/null)"
+    if [ -n "$b" ]; then b=${b//\%/%%}; line="${line}─[%F{yellow}${b}%F{red}]"; fi
+  fi
+  if [[ "${SV_SHOW_TIME:-0}" == 1 ]]; then
+    line="${line}─[%F{cyan}%*%F{red}]"
+  fi
+  if [[ "${SV_SHOW_EXIT:-0}" == 1 && "$ec" != 0 ]]; then
+    line="${line}─[%F{red}✗ ${ec}%F{red}]"
+  fi
+  PROMPT="${line}
 %F{red}└──╼ %F{green}%# "
   return $ec
 }
@@ -216,6 +288,117 @@ if [[ -z "${precmd_functions[(r)__sv_prompt]}" ]]; then
   precmd_functions+=(__sv_prompt)
 fi
 "##;
+
+/// Bash hook that reports the working directory to SplitView via an OSC 7
+/// sequence on every prompt. The frontend listens for this and spawns new split
+/// panes in the same directory. Kept separate from the prompt so cwd reporting
+/// works regardless of prompt style. BEL-terminated; xterm.js consumes it so
+/// nothing is shown.
+const OSC7_BASH: &str = r##"
+__sv_osc7() { printf '\033]7;file://%s%s\a' "${HOSTNAME:-localhost}" "$PWD"; }
+case "${PROMPT_COMMAND:-}" in
+  *__sv_osc7*) ;;
+  *) PROMPT_COMMAND="__sv_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+esac
+"##;
+
+/// zsh counterpart of [`OSC7_BASH`], installed via a `precmd` hook.
+const OSC7_ZSH: &str = r##"
+__sv_osc7() { printf '\033]7;file://%s%s\a' "${HOST:-localhost}" "$PWD"; }
+typeset -ga precmd_functions
+if [[ -z "${precmd_functions[(r)__sv_osc7]}" ]]; then
+  precmd_functions+=(__sv_osc7)
+fi
+"##;
+
+/// `"1"`/`"0"` for an `SV_SHOW_*` env flag.
+fn bit(b: bool) -> &'static str {
+    if b {
+        "1"
+    } else {
+        "0"
+    }
+}
+
+/// Single-quote a string for safe inclusion in a shell command. Embedded single
+/// quotes become the classic `'\''` escape, so an alias command can contain any
+/// characters without breaking out of the quoting.
+fn sh_squote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// An alias name must be a bare word so it can't inject shell syntax. Anything
+/// else is dropped silently (the Settings UI restricts input too).
+fn valid_alias_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Shell snippet appended after the prompt setup for *every* style: the user's
+/// aliases as real `alias` definitions, plus the `splitview` app command. The
+/// app command emits a private OSC 5170 sequence carrying its arguments; the
+/// frontend interprets it (e.g. `splitview settings` opens the Settings window).
+fn app_snippet(aliases: &[Alias]) -> String {
+    let mut s = String::new();
+    for a in aliases {
+        if valid_alias_name(&a.name) {
+            s.push_str(&format!("alias {}={}\n", a.name, sh_squote(&a.command)));
+        }
+    }
+    s.push_str("splitview() { printf '\\033]5170;%s\\a' \"$*\"; }\n");
+    s
+}
+
+/// Shell snippet that prints the banner once, during rcfile sourcing, so it
+/// lands just before the first prompt as part of the shell's own output (the
+/// reliable place for it — writing it from the frontend races with the terminal
+/// mounting and gets cleared). Each line is single-quote-escaped; `printf %b`
+/// honours `\e[…m` colour escapes. Empty banner → no snippet.
+fn banner_snippet(banner: &str) -> String {
+    if banner.is_empty() {
+        return String::new();
+    }
+    let mut args = String::new();
+    for line in banner.split('\n') {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        args.push(' ');
+        args.push_str(&sh_squote(line));
+    }
+    format!("printf '%b\\n'{args}\n")
+}
+
+/// Normalize a working directory for `CommandBuilder::cwd`. On Windows the cwd
+/// inherited from a split arrives as an msys path (e.g. `/c/Users/john`, the
+/// shell's `$PWD`); convert it back to a native `C:\Users\john` so the spawn
+/// actually lands there. On other platforms the path is already native.
+fn normalize_cwd(cwd: &str) -> String {
+    #[cfg(windows)]
+    {
+        let b = cwd.as_bytes();
+        if b.len() >= 2
+            && b[0] == b'/'
+            && (b[1] as char).is_ascii_alphabetic()
+            && (b.len() == 2 || b[2] == b'/')
+        {
+            let drive = (b[1] as char).to_ascii_uppercase();
+            let rest = cwd.get(3..).unwrap_or("").replace('/', "\\");
+            return format!("{drive}:\\{rest}");
+        }
+    }
+    cwd.to_string()
+}
 
 fn unique_path(prefix: &str) -> PathBuf {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -273,13 +456,28 @@ pub fn build_command(cfg: &ShellConfig) -> Result<CommandBuilder> {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
 
+    // Prompt-segment toggles, read by `__sv_prompt` each time it rebuilds.
+    let pi = cfg.prompt_info;
+    cmd.env("SV_SHOW_USER", bit(pi.user));
+    cmd.env("SV_SHOW_HOST", bit(pi.host));
+    cmd.env("SV_SHOW_DIR", bit(pi.dir));
+    cmd.env("SV_SHOW_BRANCH", bit(pi.branch));
+    cmd.env("SV_SHOW_TIME", bit(pi.time));
+    cmd.env("SV_SHOW_EXIT", bit(pi.exit_status));
+
+    // Aliases + the `splitview` app command + OSC 7 cwd reporting, appended
+    // after the prompt setup so they apply for both prompt styles. The banner
+    // goes last so it prints immediately before the first prompt.
+    let app = app_snippet(&cfg.aliases);
+    let banner = banner_snippet(&cfg.banner);
+
     match kind {
         ShellKind::Bash => {
             let setup = match cfg.style {
                 PromptStyle::Parrot => PARROT_BASH_SETUP.to_string(),
                 PromptStyle::Plain => format!("PS1='{}'\n", to_bash_ps1(&cfg.prompt)),
             };
-            let rc = bash_rcfile(&setup)?;
+            let rc = bash_rcfile(&format!("{setup}\n{OSC7_BASH}\n{app}\n{banner}"))?;
             cmd.args(["--rcfile", &rc.to_string_lossy(), "-i"]);
         }
         ShellKind::Zsh => {
@@ -287,19 +485,20 @@ pub fn build_command(cfg: &ShellConfig) -> Result<CommandBuilder> {
                 PromptStyle::Parrot => PARROT_ZSH_SETUP.to_string(),
                 PromptStyle::Plain => format!("PROMPT='{}'\n", to_zsh_prompt(&cfg.prompt)),
             };
-            let zdot = zsh_zdotdir(&setup)?;
+            let zdot = zsh_zdotdir(&format!("{setup}\n{OSC7_ZSH}\n{app}\n{banner}"))?;
             cmd.env("ZDOTDIR", &zdot);
             cmd.arg("-i");
         }
         // fish / others: best-effort. Don't mangle the user's prompt; just run
-        // interactively and let them keep their own (CLAUDE.md §8).
+        // interactively and let them keep their own (CLAUDE.md §8). Aliases and
+        // cwd reporting aren't injected for these shells.
         ShellKind::Fish | ShellKind::Sh | ShellKind::Other => {
             cmd.arg("-i");
         }
     }
 
     match &cfg.cwd {
-        Some(cwd) if !cwd.trim().is_empty() => cmd.cwd(cwd),
+        Some(cwd) if !cwd.trim().is_empty() => cmd.cwd(normalize_cwd(cwd)),
         _ => {
             if let Some(home) = dirs::home_dir() {
                 cmd.cwd(home);
@@ -354,9 +553,16 @@ mod tests {
             assert!(setup.contains("tr 'A-Z' 'a-z'"));
             assert!(!setup.contains("PWD/#"));
             assert!(setup.contains("git symbolic-ref --quiet --short HEAD"));
-            assert!(setup.contains("┌─["));
+            // The box frame is now assembled segment-by-segment, so `┌` and the
+            // `─[` segment opener appear separately rather than as one literal.
+            assert!(setup.contains("┌"));
+            assert!(setup.contains("─["));
             assert!(setup.contains("└──╼"));
             assert!(setup.contains("return $ec"));
+            // Segments are gated on the SV_SHOW_* toggles.
+            assert!(setup.contains("SV_SHOW_DIR"));
+            assert!(setup.contains("SV_SHOW_BRANCH"));
+            assert!(setup.contains("SV_SHOW_USER"));
         }
         // bash uses \[ \] width markers + PROMPT_COMMAND; zsh uses %F + precmd.
         assert!(PARROT_BASH_SETUP.contains("\\u@\\h"));
@@ -365,5 +571,77 @@ mod tests {
         assert!(PARROT_ZSH_SETUP.contains("%n@%m"));
         assert!(PARROT_ZSH_SETUP.contains("%F{green}"));
         assert!(PARROT_ZSH_SETUP.contains("precmd_functions+=(__sv_prompt)"));
+    }
+
+    #[test]
+    fn osc7_hooks_report_cwd_separately_from_prompt() {
+        // cwd reporting is a dedicated hook, not part of the prompt body.
+        for hook in [OSC7_BASH, OSC7_ZSH] {
+            assert!(hook.contains("]7;file://"));
+        }
+        assert!(!PARROT_BASH_SETUP.contains("]7;file://"));
+        assert!(!PARROT_ZSH_SETUP.contains("]7;file://"));
+    }
+
+    #[test]
+    fn app_snippet_injects_aliases_and_app_command() {
+        let aliases = vec![
+            Alias {
+                name: "gs".into(),
+                command: "git status".into(),
+            },
+            // Single quotes in the command are escaped, not broken out of.
+            Alias {
+                name: "say".into(),
+                command: "echo 'hi there'".into(),
+            },
+            // Invalid name is dropped.
+            Alias {
+                name: "bad name!".into(),
+                command: "rm -rf /".into(),
+            },
+        ];
+        let s = app_snippet(&aliases);
+        assert!(s.contains("alias gs='git status'"));
+        assert!(s.contains("alias say='echo '\\''hi there'\\'''"));
+        assert!(!s.contains("bad name"));
+        // The app command emits the private OSC 5170 sequence.
+        assert!(s.contains("splitview()"));
+        assert!(s.contains("]5170;"));
+    }
+
+    #[test]
+    fn banner_snippet_prints_each_line_safely() {
+        assert_eq!(banner_snippet(""), "");
+        // Multi-line, with an embedded single quote that must be escaped.
+        let s = banner_snippet("hello\nit's me");
+        assert_eq!(s, "printf '%b\\n' 'hello' 'it'\\''s me'\n");
+        // CRLF line endings are normalized.
+        assert_eq!(banner_snippet("a\r\nb"), "printf '%b\\n' 'a' 'b'\n");
+    }
+
+    #[test]
+    fn valid_alias_name_rejects_shell_metacharacters() {
+        assert!(valid_alias_name("gs"));
+        assert!(valid_alias_name("g-s_2"));
+        assert!(!valid_alias_name(""));
+        assert!(!valid_alias_name("a b"));
+        assert!(!valid_alias_name("a;b"));
+        assert!(!valid_alias_name("$(x)"));
+    }
+
+    #[test]
+    fn normalize_cwd_passes_through_posix_paths() {
+        assert_eq!(normalize_cwd("/home/john/proj"), "/home/john/proj");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalize_cwd_converts_msys_drive_paths() {
+        assert_eq!(normalize_cwd("/c/Users/john"), "C:\\Users\\john");
+        assert_eq!(normalize_cwd("/c/"), "C:\\");
+        assert_eq!(normalize_cwd("/c"), "C:\\");
+        // Already-native paths are untouched.
+        assert_eq!(normalize_cwd("D:\\work"), "D:\\work");
     }
 }

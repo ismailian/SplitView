@@ -127,6 +127,7 @@ export const DEFAULT_KEYMAP: KeymapConfig = {
     z: "toggle_zoom",
     x: "close_pane",
     r: "reload_config",
+    ",": "open_settings",
   },
   // Global chords active *without* the prefix. These are the explicit, opt-in
   // exception to "never swallow keys outside prefix mode" (CLAUDE.md §9): each
