@@ -8,10 +8,12 @@
 
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
+import type { SerializeAddon } from "@xterm/addon-serialize";
 import { createTerminal, themeFromCss } from "./renderer";
 import type { Config } from "../config/config";
 import {
   spawnPty,
+  attachPty,
   writePty,
   resizePty,
   closePty,
@@ -46,6 +48,7 @@ export class Pane {
   readonly el: HTMLDivElement;
   readonly term: Terminal;
   private readonly fit: FitAddon;
+  private readonly serializer: SerializeAddon;
   private paneId: PaneId | null = null;
   private resizeTimer: number | null = null;
   private lastCols = 0;
@@ -66,19 +69,30 @@ export class Pane {
   /** Latest working directory reported by the shell via OSC 7, if any. */
   private currentCwd: string | null = null;
 
-  private constructor(el: HTMLDivElement, term: Terminal, fit: FitAddon) {
+  private constructor(
+    el: HTMLDivElement,
+    term: Terminal,
+    fit: FitAddon,
+    serializer: SerializeAddon,
+  ) {
     this.el = el;
     this.term = term;
     this.fit = fit;
+    this.serializer = serializer;
   }
 
-  /** Create a pane, mount xterm.js, and spawn its PTY. */
-  static async create(cfg: Config, spawn: SpawnExtras = {}): Promise<Pane> {
+  /**
+   * Build the DOM node + xterm.js instance and wire every handler that is
+   * independent of *how* the PTY is obtained (OSC parsing, focus forwarding,
+   * key interception, keystrokes → PTY). Both `create` (spawns a fresh PTY) and
+   * `attach` (adopts an existing one) start here.
+   */
+  private static mount(cfg: Config): Pane {
     const el = document.createElement("div");
     el.className = "pane";
 
-    const { term, fit } = createTerminal(el, cfg);
-    const pane = new Pane(el, term, fit);
+    const { term, fit, serialize } = createTerminal(el, cfg);
+    const pane = new Pane(el, term, fit, serialize);
 
     // OSC 7: the shell reports its cwd each prompt so a new split inherits it.
     // OSC 5170: SplitView's private app-command channel — the injected
@@ -120,16 +134,29 @@ export class Pane {
       return true;
     });
 
-    // Size to the container before spawning so the PTY starts at the right size.
+    // Keystrokes -> PTY. xterm.js buffers/flushes on its own; we don't add a
+    // per-keystroke loop on top. Guarded by `paneId` so it is inert until the
+    // PTY is spawned/attached below.
+    term.onData((data) => {
+      if (pane.paneId) void writePty(pane.paneId, encode(data));
+    });
+
+    // Size to the container before the PTY starts so it opens at the right size.
     pane.safeFit();
-    const { cols, rows } = term;
-    pane.lastCols = cols;
-    pane.lastRows = rows;
+    pane.lastCols = term.cols;
+    pane.lastRows = term.rows;
+
+    return pane;
+  }
+
+  /** Create a pane, mount xterm.js, and spawn its PTY. */
+  static async create(cfg: Config, spawn: SpawnExtras = {}): Promise<Pane> {
+    const pane = Pane.mount(cfg);
 
     const id = await spawnPty(
       {
-        cols,
-        rows,
+        cols: pane.term.cols,
+        rows: pane.term.rows,
         cwd: spawn.cwd,
         shell: cfg.shell,
         prompt: cfg.prompt,
@@ -139,15 +166,33 @@ export class Pane {
         banner: spawn.banner,
       },
       (bytes) => {
-        if (!pane.disposed) term.write(bytes);
+        if (!pane.disposed) pane.term.write(bytes);
       },
     );
     pane.paneId = id;
 
-    // Keystrokes -> PTY. xterm.js buffers/flushes on its own; we don't add a
-    // per-keystroke loop on top.
-    term.onData((data) => {
-      if (pane.paneId) void writePty(pane.paneId, encode(data));
+    return pane;
+  }
+
+  /**
+   * Adopt an **existing** backend PTY (identified by `existingId`) into a fresh
+   * terminal — the destination side of a detach/reattach. The prior contents are
+   * restored from `serialized` (an `@xterm/addon-serialize` dump) *before* the
+   * live stream is attached, so scrollback survives the move. `attach_pty` swaps
+   * the backend reader's sink to this window's channel; the PTY never restarts.
+   */
+  static async attach(
+    cfg: Config,
+    existingId: PaneId,
+    serialized: string,
+  ): Promise<Pane> {
+    const pane = Pane.mount(cfg);
+
+    if (serialized) pane.term.write(serialized);
+    pane.paneId = existingId;
+
+    await attachPty(existingId, (bytes) => {
+      if (!pane.disposed) pane.term.write(bytes);
     });
 
     return pane;
@@ -224,6 +269,31 @@ export class Pane {
       this.resizeTimer = null;
       if (this.paneId) void resizePty(this.paneId, cols, rows);
     }, RESIZE_DEBOUNCE_MS);
+  }
+
+  /**
+   * Serialize the terminal buffer (screen + scrollback) to a string that a
+   * fresh terminal can `write()` to reproduce it. Used to carry history across
+   * a detach/reattach; call it *before* `detachDispose()`.
+   */
+  serialize(): string {
+    if (this.disposed) return "";
+    return this.serializer.serialize();
+  }
+
+  /**
+   * Tear down the terminal and DOM node **without** killing the PTY, so the
+   * pane's shell keeps running and can be adopted by another window via
+   * `Pane.attach`. This is the detach/reattach path; contrast `dispose()`,
+   * which also kills the PTY.
+   */
+  detachDispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.resizeTimer !== null) window.clearTimeout(this.resizeTimer);
+    this.paneId = null;
+    this.term.dispose();
+    this.el.remove();
   }
 
   /** Kill the PTY and dispose the terminal. */

@@ -7,7 +7,7 @@
  */
 
 import { invoke, Channel } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** A user-defined alias: typing `name` in the shell runs `command`. */
 export interface Alias {
@@ -60,6 +60,21 @@ export async function spawnPty(
   return invoke<PaneId>("spawn_pty", { onOutput: channel, opts });
 }
 
+/**
+ * Re-point an existing pane's PTY output to *this* window's channel. The PTY and
+ * its shell keep running untouched; only the sink the backend reader streams to
+ * is swapped. Used when a detached window adopts a popped-out pane, or when the
+ * main window reattaches one. Mirrors `spawnPty`'s channel wiring.
+ */
+export async function attachPty(
+  paneId: PaneId,
+  onOutput: OutputHandler,
+): Promise<void> {
+  const channel = new Channel<number[]>();
+  channel.onmessage = (msg) => onOutput(new Uint8Array(msg));
+  await invoke("attach_pty", { paneId, onOutput: channel });
+}
+
 /** Write keystrokes/bytes to a pane's PTY. */
 export async function writePty(paneId: PaneId, data: Uint8Array): Promise<void> {
   await invoke("write_pty", { paneId, data: Array.from(data) });
@@ -85,6 +100,20 @@ export async function listPanes(): Promise<PaneId[]> {
 }
 
 /**
+ * Stash a pane's serialized xterm buffer so the window it is moving to can pick
+ * it up via `takeHandoff`. Carries scrollback across a detach/reattach without
+ * smuggling a large buffer through the detached window's URL.
+ */
+export async function stashHandoff(paneId: PaneId, data: string): Promise<void> {
+  await invoke("stash_handoff", { paneId, data });
+}
+
+/** Take (and clear) a pane's stashed serialized buffer, or `null` if none. */
+export async function takeHandoff(paneId: PaneId): Promise<string | null> {
+  return invoke<string | null>("take_handoff", { paneId });
+}
+
+/**
  * Show the OS-native file picker and return the selected absolute path, or
  * `null` if the user cancelled. The dialog is driven entirely by the backend
  * `pick_file` command (CLAUDE.md §10 — no `invoke` outside this module).
@@ -102,4 +131,24 @@ export async function onPtyExit(
   handler: (paneId: PaneId) => void,
 ): Promise<UnlistenFn> {
   return listen<PaneId>("pty-exit", (event) => handler(event.payload));
+}
+
+/** Cross-window signal a detached window sends to ask the main window to adopt
+ * its pane back into the layout. */
+interface ReattachRequest {
+  paneId: PaneId;
+}
+
+/** Main window: listen for a detached window asking to send its pane home. */
+export async function onReattachPane(
+  handler: (paneId: PaneId) => void,
+): Promise<UnlistenFn> {
+  return listen<ReattachRequest>("reattach-pane", (event) =>
+    handler(event.payload.paneId),
+  );
+}
+
+/** Detached window: ask the main window to reattach this pane into its layout. */
+export async function requestReattach(paneId: PaneId): Promise<void> {
+  await emit("reattach-pane", { paneId } satisfies ReattachRequest);
 }

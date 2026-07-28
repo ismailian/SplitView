@@ -81,6 +81,12 @@ export function parseChord(chord: string): ParsedChord {
   return { ctrl, alt, shift, meta, key: rest };
 }
 
+/** True for a lone modifier key event (Shift/Control/Alt/Meta by themselves). */
+function isBareModifier(key: string): boolean {
+  const k = key.toLowerCase();
+  return k === "shift" || k === "control" || k === "alt" || k === "meta";
+}
+
 function buildChord(p: ParsedChord): string {
   let s = "";
   if (p.ctrl) s += "C-";
@@ -126,6 +132,7 @@ export const DEFAULT_KEYMAP: KeymapConfig = {
     // Misc
     z: "toggle_zoom",
     x: "close_pane",
+    d: "detach_pane",
     r: "reload_config",
     ",": "open_settings",
   },
@@ -196,6 +203,21 @@ export class Keymap {
 
   /** Core state machine. See CLAUDE.md §9 for the rules. */
   handleKey(ev: KeyEvent): KeyOutcome {
+    // A lone modifier keydown (Shift/Ctrl/Alt/Meta by itself) must not resolve
+    // prefix mode. Reaching a move (Shift+…) or resize (Ctrl+…) chord means
+    // pressing the modifier *first*, which fires its own keydown; without this
+    // guard that keydown would match no binding and silently cancel prefix mode
+    // before the real key arrives, making every modifier-bearing binding
+    // unreachable. While in prefix, swallow it and re-arm the timeout so the
+    // window stays open; outside prefix, let it flow to the terminal untouched.
+    if (isBareModifier(ev.key)) {
+      if (this.inPrefix) {
+        this.armTimeout();
+        return { handled: true };
+      }
+      return { handled: false };
+    }
+
     const chord = chordOf(ev);
 
     if (!this.inPrefix) {

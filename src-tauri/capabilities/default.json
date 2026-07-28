@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window. Custom PTY commands (spawn_pty, write_pty, resize_pty, close_pty, list_panes) are app-local and permitted by default; only the minimal core surface is granted here (CLAUDE.md §15). `core:window:allow-close` lets the frontend close the window when the last pane's shell exits.",
+  "description": "Capability for the main window. Custom PTY commands (spawn_pty, write_pty, resize_pty, close_pty, list_panes, attach_pty, stash_handoff, take_handoff) are app-local and permitted by default; only the minimal core surface is granted here (CLAUDE.md §15). `core:window:allow-close` lets the frontend close the window when the last pane's shell exits; `core:webview:allow-create-webview-window` lets it pop a pane out into a detached window.",
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "core:window:allow-close"
+    "core:window:allow-close",
+    "core:webview:allow-create-webview-window"
   ]
 }

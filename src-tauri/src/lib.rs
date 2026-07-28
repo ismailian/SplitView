@@ -22,6 +22,9 @@ pub fn run() {
             commands::resize_pty,
             commands::close_pty,
             commands::list_panes,
+            commands::attach_pty,
+            commands::stash_handoff,
+            commands::take_handoff,
             commands::pick_file,
         ])
         .run(tauri::generate_context!())

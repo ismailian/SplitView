@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "detached",
+  "description": "Capability for detached pane windows (label `detached-*`). A detached window hosts a single popped-out terminal. Custom PTY commands (attach_pty, write_pty, resize_pty, close_pty, stash/take_handoff) are app-local and permitted by default; it only needs the core surface plus the ability to close and focus itself.",
+  "windows": ["detached-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-focus"
+  ]
+}

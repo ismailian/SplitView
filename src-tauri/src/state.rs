@@ -5,12 +5,19 @@
 //! the layout tree, and focus all live in the frontend.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use portable_pty::{ChildKiller, MasterPty};
+use tauri::ipc::Channel;
 
 /// Mirrors the frontend's `PaneId` (an opaque string).
 pub type PaneId = String;
+
+/// The PTY's output sink: the reader thread forwards each chunk here, and
+/// `attach_pty` swaps it to a different window's `Channel` when a pane is
+/// detached or reattached. Shared (`Arc`) between the reader thread and the
+/// `PtyHandle`; locked only for the brief send (never across the blocking read).
+pub type OutputSink = Arc<Mutex<Channel<Vec<u8>>>>;
 
 /// Everything we need to keep a single PTY alive and talk to it.
 ///
@@ -27,6 +34,9 @@ pub struct PtyHandle {
     /// Kills the shell process on `close_pty`. Reaping happens in the waiter
     /// thread (see `pty.rs`), which owns the actual `Child`.
     pub killer: Box<dyn ChildKiller + Send + Sync>,
+    /// Where the reader thread streams output. `attach_pty` re-points this to a
+    /// new window's channel so a pane can move between windows (CLAUDE.md §4).
+    pub output: OutputSink,
 }
 
 #[derive(Default)]
@@ -34,4 +44,9 @@ pub struct AppState {
     /// Live panes. Never hold this lock across a blocking PTY read or a
     /// `Channel` send (CLAUDE.md §11).
     pub panes: Mutex<HashMap<PaneId, PtyHandle>>,
+    /// Serialized xterm.js buffers in flight between windows during a
+    /// detach/reattach. Set by `stash_handoff`, consumed by `take_handoff`
+    /// (the new window reads its pane's scrollback here rather than smuggling a
+    /// large buffer through a URL query string).
+    pub handoff: Mutex<HashMap<PaneId, String>>,
 }

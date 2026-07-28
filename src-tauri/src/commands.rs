@@ -171,6 +171,49 @@ pub fn list_panes(state: State<'_, AppState>) -> Result<Vec<PaneId>> {
     Ok(panes.keys().cloned().collect())
 }
 
+/// Re-point an existing pane's PTY output to a new window's channel. Used when a
+/// pane is detached into its own window or reattached to the main window: the
+/// PTY (and shell) keeps running untouched; only the sink the reader thread
+/// streams to is swapped (CLAUDE.md §4). The lock is held only briefly.
+#[tauri::command]
+pub fn attach_pty(
+    state: State<'_, AppState>,
+    pane_id: PaneId,
+    on_output: Channel<Vec<u8>>,
+) -> Result<()> {
+    let panes = state.panes.lock().map_err(|_| Error::Poisoned)?;
+    let handle = panes
+        .get(&pane_id)
+        .ok_or_else(|| Error::PaneNotFound(pane_id.clone()))?;
+    *handle.output.lock().map_err(|_| Error::Poisoned)? = on_output;
+    Ok(())
+}
+
+/// Stash a pane's serialized xterm.js buffer so the window it is moving to can
+/// pick it up (see `take_handoff`). Keyed by pane id. This carries scrollback
+/// across a detach/reattach without smuggling a large buffer through a URL.
+#[tauri::command]
+pub fn stash_handoff(state: State<'_, AppState>, pane_id: PaneId, data: String) -> Result<()> {
+    state
+        .handoff
+        .lock()
+        .map_err(|_| Error::Poisoned)?
+        .insert(pane_id, data);
+    Ok(())
+}
+
+/// Take (and remove) a pane's stashed serialized buffer, if any. The receiving
+/// window writes it into its fresh terminal before attaching the live stream so
+/// scrollback survives the move.
+#[tauri::command]
+pub fn take_handoff(state: State<'_, AppState>, pane_id: PaneId) -> Result<Option<String>> {
+    Ok(state
+        .handoff
+        .lock()
+        .map_err(|_| Error::Poisoned)?
+        .remove(&pane_id))
+}
+
 /// Open the OS-native file picker and return the absolute path of the selected
 /// file, or `None` if the user cancelled.
 ///

@@ -17,6 +17,10 @@ export interface AppActions {
   move(dir: Direction): void;
   toggleZoom(): void;
   closePane(): void;
+  /** Pop the focused pane out into its own window (main window only). */
+  detach(): void;
+  /** Send a detached pane back into the main window (detached window only). */
+  reattach(): void;
   resize(dir: Direction): void;
   reloadConfig(): void;
   /** Pick a file from the native dialog and insert its path (Win+O). */
@@ -35,6 +39,8 @@ export const ACTION_INFO: Record<string, { label: string; category: string }> = 
   split_right: { label: "Split vertically (side by side)", category: "Panes" },
   toggle_zoom: { label: "Toggle zoom (maximize pane)", category: "Panes" },
   close_pane: { label: "Close focused pane", category: "Panes" },
+  detach_pane: { label: "Detach pane into its own window", category: "Panes" },
+  reattach_pane: { label: "Reattach pane to the main window", category: "Panes" },
 
   focus_left: { label: "Focus pane left", category: "Focus" },
   focus_down: { label: "Focus pane down", category: "Focus" },
@@ -84,6 +90,8 @@ export const actionHandlers: Record<string, ActionHandler> = {
 
   toggle_zoom: (a) => a.toggleZoom(),
   close_pane: (a) => a.closePane(),
+  detach_pane: (a) => a.detach(),
+  reattach_pane: (a) => a.reattach(),
   reload_config: (a) => a.reloadConfig(),
 
   open_file_dialog: (a) => a.openFileDialog(),

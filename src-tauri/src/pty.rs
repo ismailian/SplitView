@@ -5,6 +5,7 @@
 //! parsing, and rendering all live in xterm.js on the frontend.
 
 use std::io::Read;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use portable_pty::{native_pty_system, PtySize};
@@ -13,7 +14,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::error::{Error, Result};
 use crate::shell::{build_command, ShellConfig};
-use crate::state::{PaneId, PtyHandle};
+use crate::state::{OutputSink, PaneId, PtyHandle};
 
 /// Event name emitted (with the `PaneId` payload) when a pane's shell exits, so
 /// the frontend can close the pane. See `commands::spawn_pty` and the frontend
@@ -80,18 +81,29 @@ pub fn spawn(
         .take_writer()
         .map_err(|e| Error::Pty(e.to_string()))?;
 
+    // The output sink is swappable so a pane can move between windows: the
+    // reader always sends to whatever `Channel` is currently installed, and
+    // `attach_pty` re-points it (CLAUDE.md §4). Shared between this thread and
+    // the `PtyHandle`; locked only for the brief send.
+    let output: OutputSink = Arc::new(Mutex::new(on_output));
+    let reader_output = Arc::clone(&output);
+
     // One dedicated reader thread per PTY. It blocks on the read (never under
     // the state lock, never on the async command path) and forwards chunks. It
-    // is purely a pipe: it exits on EOF/error and is *not* what detects shell
-    // exit (see the waiter thread below for why).
+    // is purely a pipe: it exits on read EOF/error and is *not* what detects
+    // shell exit (see the waiter thread below for why). A *send* failure is not
+    // fatal — during a detach the window that owned the channel may have closed
+    // for the instant before `attach_pty` installs the new one — so we swallow
+    // send errors and keep reading; only read-EOF (master dropped by
+    // `close_pty`) stops the thread.
     thread::spawn(move || {
         let mut buf = [0u8; READ_BUF];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break, // EOF: master dropped
                 Ok(n) => {
-                    if on_output.send(buf[..n].to_vec()).is_err() {
-                        break; // frontend channel closed
+                    if let Ok(sink) = reader_output.lock() {
+                        let _ = sink.send(buf[..n].to_vec());
                     }
                 }
                 Err(_) => break,
@@ -115,5 +127,6 @@ pub fn spawn(
         writer,
         master: pair.master,
         killer,
+        output,
     })
 }

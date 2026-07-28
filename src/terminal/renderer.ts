@@ -9,6 +9,7 @@
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import type { Config } from "../config/config";
 
 function cssVar(name: string, fallback: string): string {
@@ -48,6 +49,8 @@ export function themeFromCss(): ITheme {
 export interface TerminalBundle {
   term: Terminal;
   fit: FitAddon;
+  /** Serializes the buffer (incl. scrollback) so a pane survives moving windows. */
+  serialize: SerializeAddon;
 }
 
 /**
@@ -68,6 +71,8 @@ export function createTerminal(el: HTMLElement, cfg: Config): TerminalBundle {
 
   const fit = new FitAddon();
   term.loadAddon(fit);
+  const serialize = new SerializeAddon();
+  term.loadAddon(serialize);
   term.open(el);
 
   try {
@@ -78,5 +83,5 @@ export function createTerminal(el: HTMLElement, cfg: Config): TerminalBundle {
     // WebGL unavailable — xterm.js falls back to its DOM/canvas renderer.
   }
 
-  return { term, fit };
+  return { term, fit, serialize };
 }

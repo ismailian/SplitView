@@ -93,6 +93,41 @@ describe("prefix engine", () => {
     expect(pressHeld("x")).toMatchObject({ action: "close_pane" });
   });
 
+  it("keeps prefix mode when a lone modifier is pressed first", () => {
+    // Reaching a move/resize chord means pressing Shift/Ctrl *before* the key.
+    // That lone-modifier keydown must not cancel prefix mode.
+    const { km } = manualKeymap();
+    km.handleKey(key("a", { ctrlKey: true })); // prefix
+    const mod = km.handleKey(key("Shift", { shiftKey: true }));
+    expect(mod).toEqual({ handled: true });
+    expect(km.isInPrefix).toBe(true);
+  });
+
+  it("resolves a move chord reached via a held Shift", () => {
+    const { km } = manualKeymap();
+    km.handleKey(key("a", { ctrlKey: true })); // prefix
+    km.handleKey(key("Shift", { shiftKey: true })); // modifier pressed first
+    expect(km.handleKey(key("L", { shiftKey: true }))).toMatchObject({
+      action: "move_right",
+    });
+  });
+
+  it("resolves a resize chord reached via a held Ctrl", () => {
+    const { km } = manualKeymap();
+    km.handleKey(key("a", { ctrlKey: true })); // prefix
+    km.handleKey(key("Control", { ctrlKey: true })); // modifier pressed first
+    expect(km.handleKey(key("l", { ctrlKey: true }))).toMatchObject({
+      action: "resize_right",
+    });
+  });
+
+  it("lets a lone modifier flow to the terminal outside prefix mode", () => {
+    const { km } = manualKeymap();
+    expect(km.handleKey(key("Shift", { shiftKey: true }))).toEqual({
+      handled: false,
+    });
+  });
+
   it("prefers an exact Ctrl binding over the relaxed fallback", () => {
     // C-h is bound to resize_left; holding Ctrl must not collapse it to h.
     const { km } = manualKeymap();
