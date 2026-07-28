@@ -134,23 +134,33 @@ splitview/
 ├── vite.config.ts
 ├── tsconfig.json
 ├── src/                       ← frontend (TypeScript)
-│   ├── main.ts                ← app bootstrap
+│   ├── main.ts                ← app bootstrap + layout-window controller
+│   ├── paths.ts               ← native ⇄ shell path helpers (TESTED)
+│   ├── shellQuote.ts          ← POSIX-quote a path for the prompt
 │   ├── terminal/
 │   │   ├── Pane.ts            ← xterm.js wrapper + PTY wiring per leaf
+│   │   ├── DetachedApp.ts     ← controller for a popped-out single-pane window
 │   │   └── renderer.ts        ← webgl/canvas renderer setup, theme application
 │   ├── layout/
 │   │   ├── tree.ts            ← layout tree types + pure operations (TESTED)
 │   │   ├── render.ts          ← maps tree -> DOM, draws dividers
 │   │   └── divider.ts         ← draggable 1px separators
+│   ├── sidebar/
+│   │   └── FileTree.ts        ← terminal-styled filesystem sidebar
+│   ├── background/
+│   │   └── BackgroundPanel.ts ← backgrounded-pane indicator + picker
+│   ├── settings/              ← in-app Settings window (model + DOM)
 │   ├── keymap/
 │   │   ├── keymap.ts          ← prefix engine + binding registry
 │   │   └── actions.ts         ← action handlers (split, focus, move, zoom...)
 │   ├── ipc/
-│   │   └── commands.ts        ← thin typed wrappers over Tauri invoke()/Channel
+│   │   ├── commands.ts        ← thin typed wrappers over Tauri invoke()/Channel
+│   │   └── windows.ts         ← window creation (new / detached windows)
 │   ├── config/
 │   │   └── config.ts          ← load/parse/validate TOML config
 │   └── styles/
 │       └── theme.css          ← CSS variables; divider + colors live here
+│                                (+ settings.css, sidebar.css, background.css)
 └── src-tauri/                 ← backend (Rust)
     ├── Cargo.toml
     ├── tauri.conf.json
@@ -332,8 +342,35 @@ split HORIZONTALLY (horizontal divider, `split_down`)
 | Toggle zoom (fullscreen focus) | `z` | `toggle_zoom` |
 | Resize focused pane | `Ctrl+h/j/k/l` (held in prefix) | `resize_pane` |
 | Close focused pane | `x` (with confirm) | `close_pane` |
+| Detach pane into its own window | `d` | `detach_pane` |
+| Background pane (keeps running) | `b` | `background_pane` |
+| List / restore backgrounded panes | `Shift+b` | `show_background` |
+| Open a new window | `n` | `new_window` |
+| Toggle the file sidebar | `e` | `toggle_sidebar` |
+| Open Settings | `,` | `open_settings` |
 | Reload config | `r` | `reload_config` |
 | Send literal prefix to shell | press prefix again | — |
+
+### Backgrounded panes
+
+`background_pane` removes the focused pane from the layout tree **without
+killing anything**: the PTY, the xterm.js instance and its scrollback stay alive,
+just hidden (`display:none`), so a dev server keeps running and keeps buffering
+output. The picker (`show_background`) lists them with a live preview of each
+one's last output line; restoring splices the pane back beside the focused one.
+Because an invisible running process is a trap, a small corner indicator shows
+the count whenever any exist, closing the window kills them, and closing the
+*last visible* pane restores the newest one instead of leaving nothing.
+
+### The file sidebar
+
+A `tree(1)`-styled column left of the pane area, outside the layout tree (it is
+not a pane and has no PTY). It roots itself at the focused terminal's directory —
+the cwd the shell reports over OSC 7 — and is navigated with `j`/`k`, `l`/`h` to
+fold, Enter to expand a directory or insert a file's path at the prompt, `c` to
+`cd` the terminal there, `u` to go up, `.` for hidden files, `r` to reload,
+Escape to return to the terminal. Paths are converted to the shell's form
+(`C:\Users\x` → `/c/Users/x` for msys) before being typed; see `src/paths.ts`.
 
 ### Implementation notes
 
@@ -361,6 +398,7 @@ Keep all Tauri calls behind typed wrappers in `src/ipc/commands.ts`. Never call
 | `resize_pty` | `(pane_id: PaneId, cols: u16, rows: u16) -> Result<()>` | Resize the PTY. |
 | `close_pty` | `(pane_id: PaneId) -> Result<()>` | Kill child, drop master, remove handle. |
 | `list_panes` | `() -> Result<Vec<PaneId>>` | Mostly for debugging/recovery. |
+| `read_dir` | `(path: Option<String>) -> Result<DirListing>` | Directory listing for the file sidebar. Accepts msys paths (normalized), sorts dirs-first, caps the entry count. |
 
 `SpawnOpts` includes optional `cwd`, optional `shell` override, and the prompt
 template (or the backend reads it from loaded config).
@@ -474,6 +512,12 @@ nothing broad. Do not enable filesystem/shell plugin permissions the app
 doesn't use. Spawning the shell happens through our own `portable-pty` code, not
 through an over-broad plugin grant. When you add a command, add its permission
 in the same change or the call will be rejected at runtime.
+
+**Capabilities are scoped by window label.** `default.json` lists the label
+patterns it applies to (`main`, `detached-*`, `sv-win-*`). A window opened at
+runtime whose label matches none of them gets no core permissions, and the
+failure is silent-ish: the window opens but `emit`/`listen`/`close` are denied.
+If you introduce a new window label, add its pattern there in the same change.
 
 ---
 

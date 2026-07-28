@@ -5,6 +5,7 @@
 //! `expect`, or `panic!` here — every fallible path returns a typed `Error`.
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tauri::ipc::Channel;
@@ -12,7 +13,7 @@ use tauri::{AppHandle, State};
 
 use crate::error::{Error, Result};
 use crate::pty;
-use crate::shell::{Alias, PromptInfo, PromptStyle, ShellConfig};
+use crate::shell::{normalize_cwd, Alias, PromptInfo, PromptStyle, ShellConfig};
 use crate::state::{AppState, PaneId};
 
 /// Options for spawning a pane's shell. Field names are camelCase to match the
@@ -214,6 +215,123 @@ pub fn take_handoff(state: State<'_, AppState>, pane_id: PaneId) -> Result<Optio
         .remove(&pane_id))
 }
 
+/// One entry of a directory listing, for the file sidebar.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirEntryInfo {
+    /// File name only (no directory part).
+    pub name: String,
+    /// Absolute native path — the sidebar passes this straight back to
+    /// `read_dir` when expanding, so it never has to join paths itself.
+    pub path: String,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    /// Dot-file (or hidden/system on Windows). The sidebar hides these until
+    /// the user asks for them.
+    pub hidden: bool,
+}
+
+/// A directory listing: the directory itself, its parent (for "go up"), and its
+/// entries sorted directories-first then case-insensitively by name.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirListing {
+    pub path: String,
+    pub parent: Option<String>,
+    pub entries: Vec<DirEntryInfo>,
+    /// True when the directory held more than [`MAX_ENTRIES`] entries and the
+    /// list was cut short (the sidebar says so rather than rendering 100k rows).
+    pub truncated: bool,
+}
+
+/// Upper bound on entries returned for one directory. A `node_modules` with tens
+/// of thousands of children must not turn into tens of thousands of DOM rows.
+const MAX_ENTRIES: usize = 4096;
+
+/// Dot-file, or hidden/system on Windows (where `C:\` is full of entries no one
+/// wants in a project tree).
+fn is_hidden(name: &str, meta: Option<&std::fs::Metadata>) -> bool {
+    if name.starts_with('.') {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+        const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
+        if let Some(m) = meta {
+            return m.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0;
+        }
+    }
+    let _ = meta;
+    false
+}
+
+/// Directories first, then case-insensitive by name — the ordering every file
+/// tree uses, and stable across platforms (`read_dir` order is not).
+fn sort_entries(entries: &mut [DirEntryInfo]) {
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+}
+
+/// List a directory for the file sidebar (CLAUDE.md §1 — the sidebar opens on
+/// whatever directory the focused terminal is in).
+///
+/// `path` is optional and may arrive in msys form (`/c/Users/john`) because it
+/// comes from the shell's OSC 7 report; [`normalize_cwd`] converts it to a native
+/// path first. `None` (or empty) lists the user's home directory. Errors — a
+/// missing directory, no permission — surface as a typed error the sidebar
+/// renders in place; nothing panics (CLAUDE.md §11).
+///
+/// `async` so the blocking filesystem walk runs off the main thread.
+#[tauri::command]
+pub async fn read_dir(path: Option<String>) -> Result<DirListing> {
+    let dir: PathBuf = match path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => PathBuf::from(normalize_cwd(p)),
+        None => dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
+    };
+
+    let mut entries: Vec<DirEntryInfo> = Vec::new();
+    for entry in std::fs::read_dir(&dir)? {
+        // A single unreadable entry must not sink the whole listing.
+        let Ok(entry) = entry else { continue };
+        let name = entry.file_name().to_string_lossy().to_string();
+        let file_type = entry.file_type().ok();
+        let is_symlink = file_type.is_some_and(|t| t.is_symlink());
+        // For a symlink, resolve the target to decide whether it expands like a
+        // directory. A broken link resolves to nothing and reads as a file.
+        let is_dir = match file_type {
+            Some(t) if t.is_symlink() => std::fs::metadata(entry.path())
+                .map(|m| m.is_dir())
+                .unwrap_or(false),
+            Some(t) => t.is_dir(),
+            None => false,
+        };
+        let meta = entry.metadata().ok();
+        entries.push(DirEntryInfo {
+            hidden: is_hidden(&name, meta.as_ref()),
+            path: entry.path().to_string_lossy().to_string(),
+            name,
+            is_dir,
+            is_symlink,
+        });
+    }
+
+    sort_entries(&mut entries);
+    let truncated = entries.len() > MAX_ENTRIES;
+    entries.truncate(MAX_ENTRIES);
+
+    Ok(DirListing {
+        parent: dir.parent().map(|p| p.to_string_lossy().to_string()),
+        path: dir.to_string_lossy().to_string(),
+        entries,
+        truncated,
+    })
+}
+
 /// Open the OS-native file picker and return the absolute path of the selected
 /// file, or `None` if the user cancelled.
 ///
@@ -231,4 +349,68 @@ pub async fn pick_file(app: AppHandle) -> Result<Option<String>> {
         .set_title("Insert file path")
         .blocking_pick_file();
     Ok(picked.map(|p| p.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(name: &str, is_dir: bool) -> DirEntryInfo {
+        DirEntryInfo {
+            name: name.to_string(),
+            path: format!("/tmp/{name}"),
+            is_dir,
+            is_symlink: false,
+            hidden: name.starts_with('.'),
+        }
+    }
+
+    #[test]
+    fn sorts_directories_first_then_case_insensitively() {
+        let mut entries = vec![
+            entry("readme.md", false),
+            entry("Zebra", true),
+            entry("apple", true),
+            entry("Build.rs", false),
+        ];
+        sort_entries(&mut entries);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["apple", "Zebra", "Build.rs", "readme.md"]);
+    }
+
+    #[test]
+    fn dot_files_are_hidden() {
+        assert!(is_hidden(".bashrc", None));
+        assert!(!is_hidden("src", None));
+    }
+
+    #[test]
+    fn read_dir_lists_a_real_directory() {
+        let base = std::env::temp_dir().join(format!("splitview-readdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("zdir")).expect("create test dir");
+        std::fs::write(base.join("a.txt"), b"x").expect("write test file");
+        std::fs::write(base.join(".dotfile"), b"x").expect("write test dotfile");
+
+        let listing =
+            tauri::async_runtime::block_on(read_dir(Some(base.to_string_lossy().to_string())))
+                .expect("listing");
+
+        let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["zdir", ".dotfile", "a.txt"]);
+        assert!(listing.entries[0].is_dir);
+        assert!(listing.entries[1].hidden);
+        assert!(!listing.truncated);
+        assert!(listing.parent.is_some());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn read_dir_reports_a_missing_directory_instead_of_panicking() {
+        let missing = std::env::temp_dir().join("splitview-does-not-exist-ever");
+        let result =
+            tauri::async_runtime::block_on(read_dir(Some(missing.to_string_lossy().to_string())));
+        assert!(result.is_err());
+    }
 }

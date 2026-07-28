@@ -10,6 +10,8 @@
 import "@xterm/xterm/css/xterm.css";
 import "./styles/theme.css";
 import "./styles/settings.css";
+import "./styles/sidebar.css";
+import "./styles/background.css";
 
 import {
   type Layout,
@@ -35,10 +37,17 @@ import {
   stashHandoff,
   takeHandoff,
 } from "./ipc/commands";
+import { openNewWindow } from "./ipc/windows";
 import { renderLayout } from "./layout/render";
 import { Pane } from "./terminal/Pane";
 import { DetachedApp } from "./terminal/DetachedApp";
 import { shellQuote } from "./shellQuote";
+import { baseName } from "./paths";
+import { FileTree } from "./sidebar/FileTree";
+import {
+  BackgroundPanel,
+  type BackgroundEntry,
+} from "./background/BackgroundPanel";
 import {
   Keymap,
   DEFAULT_KEYMAP,
@@ -63,6 +72,13 @@ import { SettingsWindow } from "./settings/SettingsWindow";
 const FONT_MIN = 6;
 const FONT_MAX = 48;
 
+/** A pane pushed out of the layout with its shell still running (<prefix> b). */
+interface BackgroundedPane {
+  pane: Pane;
+  /** When it was backgrounded, for the picker's age column. */
+  since: number;
+}
+
 class App implements AppActions {
   private layout: Layout = emptyLayout();
   private readonly panes = new Map<string, Pane>();
@@ -70,22 +86,56 @@ class App implements AppActions {
   private settings: Settings;
   private keymap: Keymap;
   private readonly settingsWindow: SettingsWindow;
+  private readonly fileTree: FileTree;
+  private readonly backgroundPanel: BackgroundPanel;
+  /** Panes running outside the layout, oldest first (insertion order). */
+  private readonly backgrounded = new Map<string, BackgroundedPane>();
   private nextSeq = 0;
   /** Detached windows we spawned, keyed by pane id → window label, so we can
-   * forget one on reattach and close the rest when the main window exits. */
+   * forget one on reattach and close the rest when this window exits. */
   private readonly detachedWindows = new Map<string, string>();
+  /** This window's Tauri label, so reattach requests can be addressed to us. */
+  private readonly windowLabel = getCurrentWindow().label;
+  /** The pane area; a sibling of the sidebar, and what the renderer positions
+   * panes inside (percentages are relative to it, not the whole window). */
+  private readonly container: HTMLElement;
   /** Current terminal font size (zoom level); starts at the configured size. */
   private fontSize: number;
+  /** True once this window is tearing down, so the close handler's second pass
+   * (after the backgrounded shells are killed) lets it actually close. */
+  private closing = false;
 
   constructor(
-    private readonly container: HTMLElement,
+    root: HTMLElement,
     config: Config,
     settings: Settings,
+    /** Directory for this window's first shell (a new window inherits the cwd
+     * of the pane it was opened from). */
+    private readonly initialCwd?: string,
   ) {
     this.config = config;
     this.settings = settings;
     this.fontSize = settings.display.fontSize;
     this.keymap = new Keymap(this.keymapConfig());
+
+    this.container = document.createElement("div");
+    this.container.className = "layout-root";
+    this.fileTree = new FileTree({
+      // A path is inserted without a newline so the user can edit or prepend a
+      // command; `cd` is sent with one, because there is nothing to edit.
+      onInsertPath: (path) => this.insertIntoTerminal(shellQuote(path)),
+      onChangeDir: (path) => this.insertIntoTerminal(`cd ${shellQuote(path)}\r`),
+      onLeave: () => this.focusedPane()?.focus(),
+    });
+    this.backgroundPanel = new BackgroundPanel({
+      list: () => this.backgroundEntries(),
+      restore: (id) => this.restoreBackgrounded(id),
+      kill: (id) => this.killBackgrounded(id),
+      onClose: () => this.focusedPane()?.focus(),
+    });
+    // Sidebar to the left of the pane area; the indicator floats over both.
+    root.append(this.fileTree.el, this.container, this.backgroundPanel.indicator);
+
     this.settingsWindow = new SettingsWindow({
       getSettings: () => this.settings,
       onChange: (next) => this.onSettingsChanged(next),
@@ -121,16 +171,32 @@ class App implements AppActions {
     // a shell that exits immediately. A failure here must not break startup.
     void onPtyExit((id) => this.onPaneExited(id)).catch(() => {});
 
-    // A detached window asking to send its pane back into our layout.
-    void onReattachPane((id) => this.onReattach(id)).catch(() => {});
+    // A detached window asking to send its pane back into our layout. The event
+    // reaches every window, so ignore requests addressed to a different one.
+    void onReattachPane((id, owner) => {
+      if (owner && owner !== this.windowLabel) return;
+      void this.onReattach(id);
+    }).catch(() => {});
 
-    // If the main window closes while detached windows are still open, close
-    // them too so their shells don't linger with no window (CLAUDE.md §20).
+    // If this window closes while detached windows or backgrounded shells are
+    // still alive, take them with it — nothing should linger with no window and
+    // no way to reach it (CLAUDE.md §20). The close is deferred until the kills
+    // are actually issued, because a window that vanishes first leaves orphaned
+    // shells behind; `closing` lets the second pass through.
     void getCurrentWindow()
-      .onCloseRequested(() => this.closeDetachedWindows())
+      .onCloseRequested(async (event) => {
+        if (this.closing) return;
+        event.preventDefault();
+        this.closing = true;
+        this.closeDetachedWindows();
+        await this.killAllBackgrounded();
+        await getCurrentWindow()
+          .close()
+          .catch(() => {});
+      })
       .catch(() => {});
 
-    const first = await this.newPane();
+    const first = await this.newPane(this.initialCwd);
     this.layout = singleLayout(first.id ?? this.placeholderId());
     this.render();
     first.focus();
@@ -191,6 +257,30 @@ class App implements AppActions {
         this.settingsWindow.close();
         this.focusedPane()?.focus();
       }
+      return;
+    }
+
+    // The backgrounded-panes picker is modal: it consumes every key, so none
+    // leak into the terminal underneath.
+    if (this.backgroundPanel.isOpen) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.backgroundPanel.handleKey(ev);
+      return;
+    }
+
+    // The sidebar gets first refusal while it holds focus, but only for the keys
+    // it uses — anything else falls through to the keymap, so the prefix (and
+    // every action) still works from inside the tree (CLAUDE.md §9). Not while a
+    // prefix is pending, though: that keystroke is a SplitView command, and the
+    // tree must not eat it.
+    if (
+      !this.keymap.isInPrefix &&
+      this.fileTree.isFocused &&
+      this.fileTree.handleKey(ev)
+    ) {
+      ev.preventDefault();
+      ev.stopPropagation();
       return;
     }
 
@@ -318,11 +408,125 @@ class App implements AppActions {
   reattach(): void {}
 
   /**
+   * Open another top-level SplitView window, with its own layout, keymap and
+   * first shell — opened in the focused pane's directory, the same inheritance
+   * a split gets. Windows are independent: closing this one does not close them.
+   */
+  newWindow(): void {
+    void openNewWindow(this.focusedPane()?.cwd).catch(() => {
+      // The OS refused the window; nothing to clean up, the layout is untouched.
+    });
+  }
+
+  /**
+   * Cycle the file sidebar: closed → open (rooted at the focused terminal's
+   * directory, reported over OSC 7) → focused-from-the-terminal → closed. The
+   * middle step matters because the sidebar loses focus as soon as you insert a
+   * path or `cd`, and the same key should take you back to the tree rather than
+   * closing it. Opening/closing changes the pane area's width, so the terminals
+   * are refit (CLAUDE.md §20 — xterm and the PTY must resize together).
+   */
+  toggleSidebar(): void {
+    if (!this.fileTree.isOpen) {
+      this.fileTree.open(this.focusedPane()?.cwd ?? null);
+    } else if (!this.fileTree.isFocused) {
+      this.fileTree.focus(); // already open, just go there — no resize
+      return;
+    } else {
+      this.fileTree.close();
+      this.focusedPane()?.focus();
+    }
+    this.refitAll();
+  }
+
+  /**
+   * Push the focused pane out of the layout **without killing it**: the PTY, the
+   * terminal and its scrollback stay alive, hidden, until it is restored from the
+   * picker (`<prefix> B`). This is the "keep the dev server running, give me back
+   * the screen" case. Requires ≥2 panes — backgrounding the only pane would empty
+   * the window.
+   */
+  backgroundPane(): void {
+    const id = this.layout.focused;
+    const pane = id ? this.panes.get(id) : undefined;
+    if (!id || !pane || this.panes.size < 2) return;
+
+    const { layout } = closePane(this.layout, id);
+    this.panes.delete(id);
+    this.backgrounded.set(id, { pane, since: Date.now() });
+    // Hidden, but still mounted: the terminal keeps consuming its PTY stream, so
+    // nothing is lost while it is out of sight.
+    pane.el.style.display = "none";
+    pane.el.classList.remove("focused");
+    this.backgroundPanel.update();
+    this.commit(layout);
+  }
+
+  /** Open the picker listing backgrounded panes. */
+  showBackground(): void {
+    this.backgroundPanel.open();
+  }
+
+  /** Snapshot for the picker: newest last, named and previewed live. */
+  private backgroundEntries(): BackgroundEntry[] {
+    return [...this.backgrounded].map(([id, { pane, since }]) => ({
+      id,
+      title: pane.title ?? (pane.cwd ? baseName(pane.cwd) : id),
+      preview: pane.previewLine(),
+      since,
+    }));
+  }
+
+  /**
+   * Bring a backgrounded pane back beside the focused one. Zoom is cleared first
+   * — restoring into a zoomed layout would put the pane somewhere invisible.
+   */
+  private restoreBackgrounded(id: string): void {
+    const entry = this.backgrounded.get(id);
+    if (!entry) return;
+    this.backgrounded.delete(id);
+    this.panes.set(id, entry.pane);
+    entry.pane.el.style.display = "block";
+    this.backgroundPanel.update();
+
+    const base = this.layout.zoomed ? { ...this.layout, zoomed: null } : this.layout;
+    this.commit(
+      base.root ? splitFocused(base, "right", id) : singleLayout(id),
+    );
+  }
+
+  /** Kill a backgrounded pane's shell for good (picker `x`). */
+  private killBackgrounded(id: string): void {
+    const entry = this.backgrounded.get(id);
+    if (!entry) return;
+    this.backgrounded.delete(id);
+    void entry.pane.dispose();
+    this.backgroundPanel.update();
+  }
+
+  /** Kill every backgrounded shell (this window is going away). Resolves once
+   * each kill has been issued, so the window can close without orphaning them. */
+  private async killAllBackgrounded(): Promise<void> {
+    const kills = [...this.backgrounded.values()].map(({ pane }) =>
+      pane.dispose().catch(() => {}),
+    );
+    this.backgrounded.clear();
+    this.backgroundPanel.update();
+    await Promise.all(kills);
+  }
+
+  /**
    * A pane's shell exited on its own (e.g. the user ran `exit`). Close it with
    * no confirmation. Ignore unknown ids — the pane may already be gone because
    * the user closed it manually (which itself triggers a `pty-exit`).
    */
   private onPaneExited(id: string): void {
+    // A backgrounded shell can exit too (the dev server crashed): drop it from
+    // the list rather than leaving a dead entry in the picker.
+    if (this.backgrounded.has(id)) {
+      this.killBackgrounded(id);
+      return;
+    }
     if (!this.panes.has(id)) return;
     this.removePane(id);
   }
@@ -331,6 +535,11 @@ class App implements AppActions {
    * Remove a pane by id: prune the layout tree, dispose its terminal, and — if
    * it was the last pane — close the window, since an empty terminal emulator
    * has nothing left to show.
+   *
+   * Unless something is backgrounded: closing the window would silently kill
+   * those shells, so the most recently backgrounded pane is restored into the
+   * empty layout instead, putting the user back in front of what is still
+   * running.
    */
   private removePane(id: string): void {
     const { layout, removedPaneId } = closePane(this.layout, id);
@@ -340,8 +549,11 @@ class App implements AppActions {
       void pane?.dispose();
     }
     this.commit(layout);
+    if (layout.root) return;
 
-    if (!layout.root) void getCurrentWindow().close();
+    const newest = [...this.backgrounded.keys()].pop();
+    if (newest) this.restoreBackgrounded(newest);
+    else void getCurrentWindow().close();
   }
 
   /**
@@ -381,7 +593,9 @@ class App implements AppActions {
     const label = `detached-${id}-${this.nextSeq++}`;
     return new Promise((resolve, reject) => {
       const win = new WebviewWindow(label, {
-        url: `index.html?pane=${encodeURIComponent(id)}`,
+        // `owner` tells the detached window which layout window to send the pane
+        // back to — there can be several (<prefix> n).
+        url: `index.html?pane=${encodeURIComponent(id)}&owner=${encodeURIComponent(this.windowLabel)}`,
         title: `SplitView — ${id}`,
         width: 720,
         height: 480,
@@ -425,6 +639,9 @@ class App implements AppActions {
     const word = cmd.trim().toLowerCase().split(/\s+/)[0];
     if (word === "settings" || word === "config") this.settingsWindow.open();
     else if (word === "reload") this.reloadConfig();
+    else if (word === "files" || word === "tree") this.toggleSidebar();
+    else if (word === "window" || word === "new") this.newWindow();
+    else if (word === "bg" || word === "background") this.showBackground();
   }
 
   /**
@@ -447,17 +664,25 @@ class App implements AppActions {
    * The dialog runs in the backend; a cancel resolves to null and is a no-op.
    */
   openFileDialog(): void {
-    const pane = this.focusedPane();
-    if (!pane) return;
     void pickFile()
       .then((path) => {
-        if (!path) return;
-        pane.focus();
-        pane.sendText(shellQuote(path));
+        if (path) this.insertIntoTerminal(shellQuote(path));
       })
       .catch(() => {
         // Dialog failed/unavailable; nothing to insert.
       });
+  }
+
+  /**
+   * Type `text` into the focused terminal and give it focus — the shared path for
+   * the file picker and the sidebar's insert/`cd`. The terminal takes focus
+   * because the point of inserting text is to act on it.
+   */
+  private insertIntoTerminal(text: string): void {
+    const pane = this.focusedPane();
+    if (!pane) return;
+    pane.focus();
+    pane.sendText(text);
   }
 
   zoomIn(): void {
@@ -490,13 +715,17 @@ async function bootstrap(): Promise<void> {
   // pane mounts so it renders with the right theme from the start.
   applyDisplay(settings.display);
 
-  // A `?pane=<id>` query marks a detached window: it hosts a single popped-out
-  // pane (adopted from the backend) rather than the full split layout.
-  const detachedId = new URLSearchParams(location.search).get("pane");
+  // The query string decides which controller boots (see `ipc/windows.ts`):
+  // `?pane=<id>` is a detached window hosting a single popped-out pane (with
+  // `owner` naming the window to send it back to); otherwise this is a full
+  // layout window, optionally opening its first shell in `?cwd=<dir>`.
+  const params = new URLSearchParams(location.search);
+  const detachedId = params.get("pane");
   if (detachedId) {
-    await new DetachedApp(container, config, settings, detachedId).start();
+    const owner = params.get("owner");
+    await new DetachedApp(container, config, settings, detachedId, owner).start();
   } else {
-    await new App(container, config, settings).start();
+    await new App(container, config, settings, params.get("cwd") ?? undefined).start();
   }
 }
 

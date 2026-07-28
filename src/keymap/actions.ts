@@ -21,6 +21,14 @@ export interface AppActions {
   detach(): void;
   /** Send a detached pane back into the main window (detached window only). */
   reattach(): void;
+  /** Open a new top-level window with its own layout and shell. */
+  newWindow(): void;
+  /** Show/hide the file sidebar, rooted at the focused terminal's directory. */
+  toggleSidebar(): void;
+  /** Push the focused pane out of the layout, leaving its shell running. */
+  backgroundPane(): void;
+  /** Open the picker listing backgrounded panes (restore / kill). */
+  showBackground(): void;
   resize(dir: Direction): void;
   reloadConfig(): void;
   /** Pick a file from the native dialog and insert its path (Win+O). */
@@ -41,6 +49,8 @@ export const ACTION_INFO: Record<string, { label: string; category: string }> = 
   close_pane: { label: "Close focused pane", category: "Panes" },
   detach_pane: { label: "Detach pane into its own window", category: "Panes" },
   reattach_pane: { label: "Reattach pane to the main window", category: "Panes" },
+  background_pane: { label: "Background pane (keep it running)", category: "Panes" },
+  show_background: { label: "Show backgrounded panes", category: "Panes" },
 
   focus_left: { label: "Focus pane left", category: "Focus" },
   focus_down: { label: "Focus pane down", category: "Focus" },
@@ -64,6 +74,8 @@ export const ACTION_INFO: Record<string, { label: string; category: string }> = 
   open_file_dialog: { label: "Insert file path (picker)", category: "App" },
   open_settings: { label: "Open Settings", category: "App" },
   reload_config: { label: "Reload config", category: "App" },
+  new_window: { label: "Open a new window", category: "App" },
+  toggle_sidebar: { label: "Toggle file sidebar", category: "App" },
 };
 
 export type ActionHandler = (a: AppActions) => void;
@@ -92,6 +104,10 @@ export const actionHandlers: Record<string, ActionHandler> = {
   close_pane: (a) => a.closePane(),
   detach_pane: (a) => a.detach(),
   reattach_pane: (a) => a.reattach(),
+  background_pane: (a) => a.backgroundPane(),
+  show_background: (a) => a.showBackground(),
+  new_window: (a) => a.newWindow(),
+  toggle_sidebar: (a) => a.toggleSidebar(),
   reload_config: (a) => a.reloadConfig(),
 
   open_file_dialog: (a) => a.openFileDialog(),

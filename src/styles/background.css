@@ -1,0 +1,123 @@
+/*
+ * Backgrounded panes: corner indicator + picker overlay (CLAUDE.md §14).
+ *
+ * The indicator is the only permanent chrome SplitView adds, so it stays tiny
+ * and dim, appears only when something is actually backgrounded, and never
+ * covers terminal content that matters (bottom-right, above the prompt line).
+ * The picker reuses the Settings overlay's backdrop and palette variables.
+ */
+
+.bg-indicator {
+  position: fixed;
+  right: 8px;
+  bottom: 6px;
+  z-index: 20;
+  padding: 2px 7px;
+  border: 1px solid var(--divider);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--ansi-8);
+  font-family: var(--font-family);
+  font-size: 10px;
+  line-height: 1.5;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+
+.bg-indicator:hover {
+  opacity: 1;
+  color: var(--ansi-2);
+  border-color: var(--divider-active);
+}
+
+.bg-window {
+  width: min(620px, 92vw);
+  max-height: min(70vh, 520px);
+  display: flex;
+  flex-direction: column;
+  background: var(--sv-bg);
+  color: var(--sv-text);
+  border: 1px solid var(--sv-line);
+  border-radius: 10px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  font-family: var(--font-family);
+  font-size: 12px;
+}
+
+.bg-titlebar {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--sv-line);
+  background: var(--sv-panel);
+  color: var(--sv-text);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.bg-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.bg-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.bg-row.selected,
+.bg-row:hover {
+  background: var(--sv-elev);
+}
+
+.bg-row.selected {
+  box-shadow: inset 2px 0 0 var(--sv-accent);
+}
+
+.bg-index {
+  flex: 0 0 auto;
+  width: 1.2em;
+  color: var(--sv-dim);
+}
+
+.bg-title {
+  flex: 0 0 auto;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--sv-accent);
+}
+
+.bg-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--sv-dim);
+}
+
+.bg-age {
+  flex: 0 0 auto;
+  color: var(--sv-dim);
+}
+
+.bg-empty {
+  display: block;
+  padding: 8px 14px;
+  color: var(--sv-dim);
+}
+
+.bg-help {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-top: 1px solid var(--sv-line);
+  background: var(--sv-panel);
+  color: var(--sv-dim);
+  font-size: 11px;
+}

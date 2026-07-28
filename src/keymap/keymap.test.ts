@@ -79,6 +79,21 @@ describe("prefix engine", () => {
     expect(press("l", { ctrlKey: true })).toMatchObject({ action: "resize_right" });
   });
 
+  it("maps the window, sidebar and background bindings", () => {
+    const { km } = manualKeymap();
+    const press = (k: string, mods?: Partial<Omit<KeyEvent, "key">>) => {
+      km.handleKey(key("a", { ctrlKey: true }));
+      return km.handleKey(key(k, mods));
+    };
+    expect(press("n")).toMatchObject({ action: "new_window" });
+    expect(press("e")).toMatchObject({ action: "toggle_sidebar" });
+    expect(press("b")).toMatchObject({ action: "background_pane" });
+    // Shift+B lists them; the lowercase binding must not shadow it.
+    expect(press("B", { shiftKey: true })).toMatchObject({
+      action: "show_background",
+    });
+  });
+
   it("still matches plain-key bindings when the prefix's Ctrl is held", () => {
     // Real-world: user holds Ctrl through "C-a" then taps s/v/z/x without
     // releasing, so those arrive as C-s / C-v / C-z / C-x.

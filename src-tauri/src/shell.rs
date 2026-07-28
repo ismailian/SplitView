@@ -379,11 +379,12 @@ fn banner_snippet(banner: &str) -> String {
     format!("printf '%b\\n'{args}\n")
 }
 
-/// Normalize a working directory for `CommandBuilder::cwd`. On Windows the cwd
-/// inherited from a split arrives as an msys path (e.g. `/c/Users/john`, the
-/// shell's `$PWD`); convert it back to a native `C:\Users\john` so the spawn
-/// actually lands there. On other platforms the path is already native.
-fn normalize_cwd(cwd: &str) -> String {
+/// Normalize a working directory to a native path. On Windows the cwd reported
+/// by the shell arrives as an msys path (e.g. `/c/Users/john`, the shell's
+/// `$PWD`); convert it back to a native `C:\Users\john` so `CommandBuilder::cwd`
+/// — and the file sidebar's `read_dir` — actually land there. On other platforms
+/// the path is already native.
+pub fn normalize_cwd(cwd: &str) -> String {
     #[cfg(windows)]
     {
         let b = cwd.as_bytes();

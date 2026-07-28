@@ -74,11 +74,25 @@ body {
   overflow: hidden;
 }
 
+/*
+ * The window shell: an optional sidebar column beside the pane area. The pane
+ * area is its own positioned container so the layout renderer's percentage
+ * rectangles are relative to *it*, not to the whole window — otherwise opening
+ * the sidebar would slide every pane under it.
+ */
 #app {
   position: relative;
+  display: flex;
   width: 100vw;
   height: 100vh;
   background: var(--bg);
+}
+
+.layout-root {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
 }
 
 /* A leaf pane. The renderer positions these absolutely. */

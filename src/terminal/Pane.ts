@@ -68,6 +68,8 @@ export class Pane {
   onAppCommand: ((cmd: string) => void) | null = null;
   /** Latest working directory reported by the shell via OSC 7, if any. */
   private currentCwd: string | null = null;
+  /** Latest terminal title (OSC 0/2), used to name a backgrounded pane. */
+  private currentTitle: string | null = null;
 
   private constructor(
     el: HTMLDivElement,
@@ -105,6 +107,12 @@ export class Pane {
     term.parser.registerOscHandler(5170, (data) => {
       if (!pane.disposed) pane.onAppCommand?.(data.trim());
       return true;
+    });
+
+    // OSC 0/2: whatever the running program calls itself. Used to name the pane
+    // in the backgrounded-panes picker.
+    term.onTitleChange((title) => {
+      pane.currentTitle = title.trim() || null;
     });
 
     // xterm focuses its helper textarea on click; that `focusin` bubbles to the
@@ -205,6 +213,28 @@ export class Pane {
   /** Latest cwd reported by the shell (OSC 7), for inheriting on split. */
   get cwd(): string | null {
     return this.currentCwd;
+  }
+
+  /** Latest terminal title (OSC 0/2), if the running program set one. */
+  get title(): string | null {
+    return this.currentTitle;
+  }
+
+  /**
+   * The last non-empty output line, for previewing a backgrounded pane. Lines
+   * belonging to the injected two-line prompt are skipped — a backgrounded dev
+   * server should be identified by what it printed, not by the prompt frame.
+   */
+  previewLine(): string {
+    if (this.disposed) return "";
+    const buf = this.term.buffer.active;
+    const from = buf.baseY + buf.cursorY;
+    for (let y = from; y >= 0 && y > from - 200; y--) {
+      const text = buf.getLine(y)?.translateToString(true).trim() ?? "";
+      if (text === "" || text.startsWith("┌") || text.startsWith("└")) continue;
+      return text;
+    }
+    return "";
   }
 
   /** Send raw bytes to the PTY (used for double-prefix passthrough). */

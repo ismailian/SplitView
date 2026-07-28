@@ -113,6 +113,36 @@ export async function takeHandoff(paneId: PaneId): Promise<string | null> {
   return invoke<string | null>("take_handoff", { paneId });
 }
 
+/** One entry of a directory listing (see the `read_dir` command). */
+export interface DirEntryInfo {
+  /** File name only. */
+  name: string;
+  /** Absolute native path; pass it straight back to `readDir` to expand it. */
+  path: string;
+  isDir: boolean;
+  isSymlink: boolean;
+  /** Dot-file (or hidden/system on Windows). */
+  hidden: boolean;
+}
+
+/** A directory listing: the directory, its parent, and its sorted entries. */
+export interface DirListing {
+  path: string;
+  parent: string | null;
+  entries: DirEntryInfo[];
+  /** The directory had more entries than the backend returns; the list is cut. */
+  truncated: boolean;
+}
+
+/**
+ * List a directory for the file sidebar. `path` may be the msys-form cwd the
+ * shell reported over OSC 7 (`/c/Users/…`); the backend normalizes it and
+ * returns native paths. Omit it to list the user's home directory.
+ */
+export async function readDir(path?: string | null): Promise<DirListing> {
+  return invoke<DirListing>("read_dir", { path: path ?? null });
+}
+
 /**
  * Show the OS-native file picker and return the selected absolute path, or
  * `null` if the user cancelled. The dialog is driven entirely by the backend
@@ -133,22 +163,29 @@ export async function onPtyExit(
   return listen<PaneId>("pty-exit", (event) => handler(event.payload));
 }
 
-/** Cross-window signal a detached window sends to ask the main window to adopt
- * its pane back into the layout. */
+/** Cross-window signal a detached window sends to ask the window it came from to
+ * adopt its pane back into the layout. */
 interface ReattachRequest {
   paneId: PaneId;
+  /** Label of the window the pane was detached from. Events are broadcast to
+   * every window, so with several layout windows open (<prefix> n) the request
+   * has to name its destination or two windows would fight over the pane. */
+  owner: string | null;
 }
 
-/** Main window: listen for a detached window asking to send its pane home. */
+/** Layout window: listen for a detached window asking to send its pane home. */
 export async function onReattachPane(
-  handler: (paneId: PaneId) => void,
+  handler: (paneId: PaneId, owner: string | null) => void,
 ): Promise<UnlistenFn> {
   return listen<ReattachRequest>("reattach-pane", (event) =>
-    handler(event.payload.paneId),
+    handler(event.payload.paneId, event.payload.owner ?? null),
   );
 }
 
-/** Detached window: ask the main window to reattach this pane into its layout. */
-export async function requestReattach(paneId: PaneId): Promise<void> {
-  await emit("reattach-pane", { paneId } satisfies ReattachRequest);
+/** Detached window: ask `owner` to reattach this pane into its layout. */
+export async function requestReattach(
+  paneId: PaneId,
+  owner: string | null,
+): Promise<void> {
+  await emit("reattach-pane", { paneId, owner } satisfies ReattachRequest);
 }

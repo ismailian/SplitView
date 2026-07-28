@@ -26,6 +26,7 @@ pub fn run() {
             commands::stash_handoff,
             commands::take_handoff,
             commands::pick_file,
+            commands::read_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

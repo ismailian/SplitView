@@ -22,6 +22,7 @@ import {
   stashHandoff,
   takeHandoff,
 } from "../ipc/commands";
+import { openNewWindow } from "../ipc/windows";
 import { Pane } from "./Pane";
 import {
   Keymap,
@@ -66,6 +67,9 @@ export class DetachedApp implements AppActions {
     config: Config,
     settings: Settings,
     private readonly paneId: string,
+    /** Label of the layout window this pane came from; `reattach` sends it back
+     * there rather than to whichever window happens to be listening. */
+    private readonly owner: string | null = null,
   ) {
     this.config = config;
     this.settings = settings;
@@ -190,6 +194,18 @@ export class DetachedApp implements AppActions {
   resize(_dir: Direction): void {}
   detach(): void {}
 
+  // Backgrounding and the file sidebar belong to a layout window: this window is
+  // one pane with nowhere to hide it and no layout to shrink. Reattach it first
+  // (`prefix d`) to use those.
+  toggleSidebar(): void {}
+  backgroundPane(): void {}
+  showBackground(): void {}
+
+  /** Open a fresh layout window, starting in this terminal's directory. */
+  newWindow(): void {
+    void openNewWindow(this.pane?.cwd).catch(() => {});
+  }
+
   /** Send this pane back into the main window's layout, then close this window
    * without killing the PTY (the main window adopts it). */
   reattach(): void {
@@ -200,7 +216,7 @@ export class DetachedApp implements AppActions {
     void (async () => {
       try {
         await stashHandoff(this.paneId, serialized);
-        await requestReattach(this.paneId);
+        await requestReattach(this.paneId, this.owner);
         pane.detachDispose(); // drop the terminal, keep the PTY alive
         await this.destroyWindow();
       } catch {
@@ -259,6 +275,7 @@ export class DetachedApp implements AppActions {
     const word = cmd.trim().toLowerCase().split(/\s+/)[0];
     if (word === "settings" || word === "config") this.settingsWindow.open();
     else if (word === "reload") this.reloadConfig();
+    else if (word === "window" || word === "new") this.newWindow();
   }
 
   private onSettingsChanged(next: Settings): void {

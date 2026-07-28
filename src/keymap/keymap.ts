@@ -129,10 +129,15 @@ export const DEFAULT_KEYMAP: KeymapConfig = {
     "C-j": "resize_down",
     "C-k": "resize_up",
     "C-l": "resize_right",
+    // Background / restore
+    b: "background_pane",
+    "S-b": "show_background",
     // Misc
     z: "toggle_zoom",
     x: "close_pane",
     d: "detach_pane",
+    n: "new_window",
+    e: "toggle_sidebar",
     r: "reload_config",
     ",": "open_settings",
   },
