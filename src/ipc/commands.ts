@@ -23,7 +23,17 @@ export interface PromptInfo {
   branch: boolean;
   time: boolean;
   exitStatus: boolean;
+  /**
+   * How much of the working directory the `dir` segment shows: `0` = the whole
+   * path (with the middle elided once it gets long), `n > 0` = only the last `n`
+   * path segments (`2` → `project-x/mobile-app`). See `promptDir` in `paths.ts`.
+   */
+  dirSegments: number;
 }
+
+/** The boolean members of `PromptInfo` — i.e. everything that is a plain on/off
+ * toggle, as opposed to `dirSegments`. */
+export type PromptToggle = Exclude<keyof PromptInfo, "dirSegments">;
 
 export interface SpawnOpts {
   cols?: number;

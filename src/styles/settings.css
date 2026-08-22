@@ -259,6 +259,26 @@
 .sv-chip:hover {
   border-color: var(--sv-accent);
 }
+/* Selected side of a two-chip choice (e.g. full path vs last N segments). */
+.sv-chip.active {
+  background: var(--sv-accent-dim);
+  border-color: var(--sv-accent);
+}
+
+/* A row of mutually exclusive chips plus their operand (e.g. the directory
+ * detail choice and its segment count). */
+.sv-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sv-seg-count {
+  width: 64px;
+}
+.sv-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 
 /* Keybindings list */
 .sv-keys {

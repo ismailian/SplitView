@@ -34,6 +34,30 @@ export function baseName(p: string): string {
 }
 
 /**
+ * How the injected prompt renders the working directory, mirrored here so the
+ * Settings preview shows the real thing.
+ *
+ * `segments === 0` reproduces the shell's `__sv_compact`: the full path, with
+ * everything between the first two segments and the last one collapsed to `...`
+ * once the path is deep enough. `segments > 0` keeps only that many trailing
+ * segments (`2` of `~/projects/project-x/mobile-app` → `project-x/mobile-app`),
+ * falling back to the whole path when it has no more segments than asked for.
+ *
+ * Keep in sync with `__sv_compact` / `__sv_tail_segs` in `src-tauri/src/shell.rs`
+ * — that is what actually draws the prompt; this is only the preview.
+ */
+export function promptDir(path: string, segments: number): string {
+  const parts = path.split("/");
+  if (segments > 0) {
+    const named = parts.filter((s) => s !== "");
+    return named.length > segments ? named.slice(-segments).join("/") : path;
+  }
+  // Fewer than three separators: short enough to show whole.
+  if (parts.length - 1 < 3) return path;
+  return `${parts[0]}/${parts[1]}/.../${parts[parts.length - 1]}`;
+}
+
+/**
  * Shorten a path for a narrow header: collapse `$HOME`-less middles to
  * `first/…/last-two` once it exceeds `max` characters. Purely cosmetic — the
  * real path is always what gets sent to the shell.

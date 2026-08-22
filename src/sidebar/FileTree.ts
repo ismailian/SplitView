@@ -22,7 +22,22 @@ export interface FileTreeDeps {
   onChangeDir(shellPath: string): void;
   /** Hand focus back to the terminal (Escape, or after acting on an entry). */
   onLeave(): void;
+  /** The sidebar's width changed, so the pane area shrank/grew: the terminals
+   * need re-fitting (and their PTYs resizing with them, CLAUDE.md §20). */
+  onResize(): void;
 }
+
+/** Sidebar width bounds and default, in px. The minimum keeps the tree readable;
+ * the maximum is a share of the window so the sidebar can never crowd out the
+ * terminals it exists to serve. */
+const MIN_WIDTH = 140;
+const DEFAULT_WIDTH = 240;
+const MAX_WIDTH_RATIO = 0.6;
+/** How much one `<`/`>` keypress moves the edge, in px. */
+const WIDTH_STEP = 20;
+/** Where the chosen width persists (the sidebar owns this bit of UI state; the
+ * Settings window has no business with it). */
+const WIDTH_KEY = "splitview.sidebar.width";
 
 /** One node of the tree. Children are loaded lazily, on first expand. */
 interface FsNode {
@@ -80,12 +95,15 @@ export class FileTree {
   private error: string | null = null;
   /** Guards against a slow listing landing after the user re-rooted the tree. */
   private loadSeq = 0;
+  /** Current width in px, restored from the last session. */
+  private width = loadWidth();
 
   constructor(private readonly deps: FileTreeDeps) {
     this.el = document.createElement("aside");
     this.el.className = "sidebar";
     this.el.tabIndex = 0;
     this.el.style.display = "none";
+    this.el.style.width = `${this.width}px`;
 
     this.headerEl = document.createElement("div");
     this.headerEl.className = "ft-header";
@@ -94,9 +112,16 @@ export class FileTree {
     this.footerEl = document.createElement("div");
     this.footerEl.className = "ft-footer";
     this.footerEl.textContent =
-      "j/k move · l/h fold · ⏎ open · c cd · u up · . hidden · r reload · esc term";
+      "j/k move · l/h fold · ⏎ open · c cd · u up · . hidden · r reload · </> width · esc term";
 
-    this.el.append(this.headerEl, this.bodyEl, this.footerEl);
+    // Drag handle on the sidebar's edge. Mouse convenience only — `<`/`>`/`=`
+    // do the same from the keyboard (CLAUDE.md §2.1, §18).
+    const resizer = document.createElement("div");
+    resizer.className = "ft-resizer";
+    resizer.title = "Drag to resize (or < / > / = from the tree)";
+    this.attachResize(resizer);
+
+    this.el.append(this.headerEl, this.bodyEl, this.footerEl, resizer);
 
     this.el.addEventListener("focus", () => {
       this.focused = true;
@@ -105,6 +130,12 @@ export class FileTree {
     this.el.addEventListener("blur", () => {
       this.focused = false;
       this.el.classList.remove("focused");
+    });
+
+    // A window that shrank can leave a previously fine width taking the whole
+    // screen and squeezing the panes to nothing; re-clamp against the new size.
+    window.addEventListener("resize", () => {
+      if (this.open_) this.setWidth(this.width);
     });
   }
 
@@ -125,6 +156,7 @@ export class FileTree {
   open(cwd: string | null): void {
     this.open_ = true;
     this.el.style.display = "flex";
+    this.setWidth(this.width); // re-clamp: the window may have shrunk since
     void this.setRoot(cwd);
     this.el.focus();
   }
@@ -137,6 +169,71 @@ export class FileTree {
   /** Focus the sidebar without re-rooting it (it is already open). */
   focus(): void {
     this.el.focus();
+  }
+
+  // --- width -------------------------------------------------------------
+
+  /**
+   * Set the sidebar's width (clamped), and tell the controller so the terminals
+   * re-fit. Not persisted here: a drag calls this once per frame, so the store
+   * is written when the gesture ends (or immediately for a keypress).
+   */
+  private setWidth(px: number): void {
+    const max = Math.max(MIN_WIDTH, window.innerWidth * MAX_WIDTH_RATIO);
+    const next = Math.round(Math.max(MIN_WIDTH, Math.min(max, px)));
+    if (next === this.width) return;
+    this.width = next;
+    this.el.style.width = `${next}px`;
+    this.deps.onResize();
+  }
+
+  /** Keyboard resize (`<` / `>` / `=`), persisted right away. */
+  private nudgeWidth(px: number): void {
+    this.setWidth(px);
+    saveWidth(this.width);
+  }
+
+  /**
+   * Pointer drag on the edge handle. Moves are coalesced to one width change per
+   * animation frame so a drag doesn't re-fit every terminal per mousemove
+   * (CLAUDE.md §13), and the listeners live on `window` so the drag survives the
+   * pointer leaving the handle's few pixels.
+   */
+  private attachResize(handle: HTMLElement): void {
+    handle.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault(); // keep focus where it is; start no text selection
+      handle.classList.add("active");
+
+      const startX = ev.clientX;
+      const startWidth = this.el.getBoundingClientRect().width;
+      const prevCursor = document.body.style.cursor;
+      const prevSelect = document.body.style.userSelect;
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+
+      let frame = 0;
+      let pending: number | null = null;
+      const flush = (): void => {
+        frame = 0;
+        if (pending !== null) this.setWidth(pending);
+      };
+      const move = (e: PointerEvent): void => {
+        pending = startWidth + (e.clientX - startX);
+        if (!frame) frame = requestAnimationFrame(flush);
+      };
+      const up = (e: PointerEvent): void => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        if (frame) cancelAnimationFrame(frame);
+        this.setWidth(startWidth + (e.clientX - startX)); // commit the last move
+        saveWidth(this.width);
+        handle.classList.remove("active");
+        document.body.style.cursor = prevCursor;
+        document.body.style.userSelect = prevSelect;
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    });
   }
 
   // --- loading -----------------------------------------------------------
@@ -243,6 +340,15 @@ export class FileTree {
         return true;
       case "r":
         this.refresh();
+        return true;
+      case "<":
+        this.nudgeWidth(this.width - WIDTH_STEP);
+        return true;
+      case ">":
+        this.nudgeWidth(this.width + WIDTH_STEP);
+        return true;
+      case "=":
+        this.nudgeWidth(DEFAULT_WIDTH);
         return true;
       case "q":
       case "Escape":
@@ -396,6 +502,26 @@ export class FileTree {
     }
     const sel = children[this.selected];
     if (sel instanceof HTMLElement) sel.scrollIntoView({ block: "nearest" });
+  }
+}
+
+/** Last chosen sidebar width, or the default if none/garbage is stored. */
+function loadWidth(): number {
+  try {
+    const raw = Number(localStorage.getItem(WIDTH_KEY));
+    if (Number.isFinite(raw) && raw >= MIN_WIDTH) return raw;
+  } catch {
+    // Storage unavailable; the default width is fine.
+  }
+  return DEFAULT_WIDTH;
+}
+
+/** Persist the width. Failures (storage disabled) are non-fatal. */
+function saveWidth(px: number): void {
+  try {
+    localStorage.setItem(WIDTH_KEY, String(px));
+  } catch {
+    // Storage unavailable; the width simply won't survive a restart.
   }
 }
 

@@ -12,8 +12,9 @@
  */
 
 import type { Settings, ColorKey } from "./settings";
-import { PRESETS } from "./settings";
-import type { PromptInfo } from "../ipc/commands";
+import { PRESETS, MAX_DIR_SEGMENTS, clampDirSegments } from "./settings";
+import type { PromptInfo, PromptToggle } from "../ipc/commands";
+import { promptDir } from "../paths";
 
 export interface KeymapView {
   prefix: string;
@@ -43,6 +44,13 @@ const SECTION_META: { id: Section; label: string }[] = [
 ];
 
 const CATEGORY_ORDER = ["Panes", "Focus", "Move / Resize", "Font", "App", "Other"];
+
+/** Stand-in working directory for the prompt preview: deep enough that both the
+ * elided-middle and the last-N-segments settings visibly do something. */
+const SAMPLE_DIR = "~/projects/project-x/mobile-app";
+
+/** Segment count the "Last segments" mode starts on when it is picked. */
+const DEFAULT_DIR_SEGMENTS = 2;
 
 const SAMPLE_BANNER = [
   "\\e[1;32m+------------------------------------------+",
@@ -416,10 +424,10 @@ export class SettingsWindow {
     renderPromptPreview(preview, p);
     section.append(preview);
 
-    const items: { key: keyof PromptInfo; label: string; desc: string }[] = [
+    const items: { key: PromptToggle; label: string; desc: string }[] = [
       { key: "user", label: "User", desc: "Your username" },
       { key: "host", label: "Computer name", desc: "The machine's hostname" },
-      { key: "dir", label: "Working directory", desc: "Current folder, compacted" },
+      { key: "dir", label: "Working directory", desc: "Current folder" },
       { key: "branch", label: "Git branch", desc: "Branch name inside a repo" },
       { key: "time", label: "Clock", desc: "Current time of day" },
       { key: "exitStatus", label: "Exit status", desc: "✗ + code when a command fails" },
@@ -435,7 +443,67 @@ export class SettingsWindow {
       );
     }
     section.append(toggles);
+    section.append(this.dirSegmentsField(p, preview));
     return section;
+  }
+
+  /**
+   * How much of the working directory the prompt shows: the whole path (long
+   * ones keep their first two segments, `...`, and the last), or just the last
+   * N segments — counted from the end, since the end is the part you are
+   * actually working in.
+   */
+  private dirSegmentsField(p: PromptInfo, preview: HTMLElement): HTMLElement {
+    const full = h("button", { class: "sv-chip", textContent: "Full path" });
+    const last = h("button", { class: "sv-chip", textContent: "Last segments" });
+    const count = h("input", {
+      class: "sv-input sv-num sv-seg-count",
+      type: "number",
+      min: "1",
+      max: String(MAX_DIR_SEGMENTS),
+      value: String(p.dirSegments || DEFAULT_DIR_SEGMENTS),
+      title: "How many trailing segments to show",
+    });
+
+    const apply = (segments: number): void => {
+      p.dirSegments = clampDirSegments(segments);
+      sync();
+      renderPromptPreview(preview, p);
+      this.emit();
+    };
+    const sync = (): void => {
+      const on = p.dirSegments > 0;
+      full.classList.toggle("active", !on);
+      last.classList.toggle("active", on);
+      count.disabled = !on;
+      if (on) count.value = String(p.dirSegments);
+    };
+
+    full.onclick = () => apply(0);
+    last.onclick = () => apply(Number(count.value) || DEFAULT_DIR_SEGMENTS);
+    count.oninput = () => {
+      const v = Number(count.value);
+      if (Number.isInteger(v) && v >= 1 && v <= MAX_DIR_SEGMENTS) apply(v);
+    };
+    sync();
+
+    // A plain div, not `field()`: that wraps the row in a `<label>`, and a click
+    // anywhere in a label activates its first control — here the "Full path"
+    // button, which would silently reset the setting.
+    return h(
+      "div",
+      { class: "sv-field" },
+      h(
+        "div",
+        { class: "sv-field-text" },
+        h("span", { class: "sv-label", textContent: "Directory detail" }),
+        h("span", {
+          class: "sv-hint",
+          textContent: `${SAMPLE_DIR} → ${promptDir(SAMPLE_DIR, 1)} at 1 segment`,
+        }),
+      ),
+      h("div", { class: "sv-choice" }, full, last, count),
+    );
   }
 
   // --- Banner ------------------------------------------------------------
@@ -567,7 +635,10 @@ function renderPromptPreview(container: HTMLElement, p: PromptInfo): void {
     const uh = p.user && p.host ? "user@host" : p.user ? "user" : "host";
     line1.append(seg("─[", red), seg(uh, white), seg("]", red));
   }
-  if (p.dir) line1.append(seg("─[", red), seg("~/projects/app", blue), seg("]", red));
+  if (p.dir) {
+    const dir = promptDir(SAMPLE_DIR, p.dirSegments);
+    line1.append(seg("─[", red), seg(dir, blue), seg("]", red));
+  }
   if (p.branch) line1.append(seg("─[", red), seg("main", yellow), seg("]", red));
   if (p.time) line1.append(seg("─[", red), seg("14:22:07", cyan), seg("]", red));
   if (p.exitStatus) line1.append(seg("─[", red), seg("✗ 1", red), seg("]", red));

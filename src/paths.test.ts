@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toShellPath, baseName, compactPath } from "./paths";
+import { toShellPath, baseName, compactPath, promptDir } from "./paths";
 
 describe("toShellPath", () => {
   it("converts native Windows paths to msys form", () => {
@@ -23,6 +23,38 @@ describe("baseName", () => {
 
   it("falls back to the path itself at a root", () => {
     expect(baseName("/")).toBe("/");
+  });
+});
+
+describe("promptDir", () => {
+  // The expected values here are what bash actually prints from __sv_compact /
+  // __sv_tail_segs in src-tauri/src/shell.rs; this mirror feeds the preview.
+  it("shows the last n segments, counted from the end", () => {
+    const p = "/d/projects/project-x/mobile-app";
+    expect(promptDir(p, 1)).toBe("mobile-app");
+    expect(promptDir(p, 2)).toBe("project-x/mobile-app");
+    expect(promptDir(p, 3)).toBe("projects/project-x/mobile-app");
+  });
+
+  it("shows the whole path when it has no more segments than asked for", () => {
+    const p = "/d/projects/project-x/mobile-app";
+    expect(promptDir(p, 4)).toBe(p);
+    expect(promptDir(p, 9)).toBe(p);
+    expect(promptDir("~", 2)).toBe("~");
+  });
+
+  it("elides the middle of a deep path when segments is 0", () => {
+    expect(promptDir("~/projects/project-x/mobile-app", 0)).toBe(
+      "~/projects/.../mobile-app",
+    );
+    expect(promptDir("/d/projects/project-x/mobile-app", 0)).toBe(
+      "/d/.../mobile-app",
+    );
+  });
+
+  it("leaves a shallow path alone when segments is 0", () => {
+    expect(promptDir("~/projects", 0)).toBe("~/projects");
+    expect(promptDir("/d/projects", 0)).toBe("/d/projects");
   });
 });
 

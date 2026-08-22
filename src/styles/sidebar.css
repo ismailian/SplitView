@@ -8,7 +8,10 @@
  */
 
 .sidebar {
+  position: relative; /* containing block for the resize handle */
   flex: 0 0 auto;
+  /* Starting width only — the controller sets an inline width, restored from
+   * the last session and changed by dragging the edge or `<`/`>` in the tree. */
   width: 15rem;
   height: 100%;
   display: none; /* toggled to flex by the controller */
@@ -26,6 +29,38 @@
 .sidebar.focused {
   border-right-color: var(--divider-active);
   background: var(--focus-tint);
+}
+
+/*
+ * Resize handle on the sidebar's edge: an invisible grab strip whose only visual
+ * is the hairline brightening, exactly like a pane divider does on hover
+ * (CLAUDE.md §14 — no widget chrome). It sits *inside* the sidebar because the
+ * sidebar clips its overflow.
+ */
+.ft-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  /* Narrow enough to leave the tree's scrollbar thumb grabbable, wide enough to
+   * hit without aiming. */
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 6;
+}
+
+.ft-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: var(--divider-size);
+  height: 100%;
+}
+
+.ft-resizer:hover::after,
+.ft-resizer.active::after {
+  background: var(--divider-active);
 }
 
 .ft-header {

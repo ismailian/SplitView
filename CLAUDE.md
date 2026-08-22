@@ -290,6 +290,14 @@ The prompt template is configurable (`prompt = "{user} @ {cwd} $ "` in config).
 `shell.rs` owns translating that template into per-shell prompt syntax. Keep
 that mapping in one place.
 
+Which segments the prompt shows, and how much of the working directory it shows,
+are Settings toggles passed to the shell as environment variables the prompt
+hook re-reads on every prompt: `SV_SHOW_*` for the segments, and
+`SV_DIR_SEGMENTS` for the directory — `0` = the whole path (middle elided once
+it is deep), `n` = only the last `n` segments (`2` →
+`project-x/mobile-app`). That translation lives in `shell.rs` too; the Settings
+preview mirrors it in `promptDir` (`src/paths.ts`) and the two must stay in sync.
+
 ### Gotcha
 
 Setting `PS1` as an *environment variable* before spawning does **not** work —
@@ -369,8 +377,11 @@ not a pane and has no PTY). It roots itself at the focused terminal's directory 
 the cwd the shell reports over OSC 7 — and is navigated with `j`/`k`, `l`/`h` to
 fold, Enter to expand a directory or insert a file's path at the prompt, `c` to
 `cd` the terminal there, `u` to go up, `.` for hidden files, `r` to reload,
-Escape to return to the terminal. Paths are converted to the shell's form
-(`C:\Users\x` → `/c/Users/x` for msys) before being typed; see `src/paths.ts`.
+`<`/`>` to narrow/widen the column (`=` resets it; the edge can also be dragged,
+and the width persists), Escape to return to the terminal. Paths are converted to
+the shell's form (`C:\Users\x` → `/c/Users/x` for msys) before being typed; see
+`src/paths.ts`. Resizing it resizes the pane area, so the terminals are refit
+(and their PTYs with them).
 
 ### Implementation notes
 
@@ -519,6 +530,13 @@ runtime whose label matches none of them gets no core permissions, and the
 failure is silent-ish: the window opens but `emit`/`listen`/`close` are denied.
 If you introduce a new window label, add its pattern there in the same change.
 
+**Closing a window needs `core:window:allow-destroy`, not just `allow-close`.**
+As soon as a window registers an `onCloseRequested` listener — every SplitView
+window does, to kill its shells first — Tauri prevents the native close and
+leaves the decision to the frontend. `close()` from inside that handler only
+re-enters it; only `destroy()` actually closes the window (see
+`destroyCurrentWindow` in `src/ipc/windows.ts`).
+
 ---
 
 ## 16. Build, dev, and test commands
@@ -616,6 +634,10 @@ npm run test        # vitest (layout tree, keymap)
   the `Channel<Vec<u8>>`. See §10.
 - **Blocking the core process.** PTY reads are blocking — they must be on
   dedicated threads, never on the async command path or under the state lock.
+- **A window that won't close.** With an `onCloseRequested` listener registered,
+  `close()` only re-runs that handler; the window is gone only after `destroy()`,
+  which needs `core:window:allow-destroy` in the capability. Get this wrong and
+  `exit` in the last pane leaves a black window whose X button does nothing.
 - **Zombie children / leaked reader threads.** Kill child → drop master → remove
   handle, in that order. EOF is what stops the reader thread.
 - **Resize mismatch.** If xterm.js cols/rows and the PTY size drift apart, output

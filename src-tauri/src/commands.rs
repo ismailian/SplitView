@@ -53,6 +53,11 @@ pub struct PromptInfoOpt {
     pub branch: bool,
     pub time: bool,
     pub exit_status: bool,
+    /// How much of the working directory to show: `0` = the whole path (middle
+    /// elided when long), `n > 0` = only the last `n` segments. Defaulted so an
+    /// older stored settings blob still deserializes.
+    #[serde(default)]
+    pub dir_segments: u8,
 }
 
 fn next_pane_id() -> PaneId {
@@ -89,6 +94,7 @@ pub fn spawn_pty(
             branch: p.branch,
             time: p.time,
             exit_status: p.exit_status,
+            dir_segments: p.dir_segments,
         })
         .unwrap_or_default();
     let shell_cfg = ShellConfig {

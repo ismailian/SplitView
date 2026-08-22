@@ -22,7 +22,7 @@ import {
   stashHandoff,
   takeHandoff,
 } from "../ipc/commands";
-import { openNewWindow } from "../ipc/windows";
+import { destroyCurrentWindow, openNewWindow } from "../ipc/windows";
 import { Pane } from "./Pane";
 import {
   Keymap,
@@ -286,10 +286,11 @@ export class DetachedApp implements AppActions {
     this.pane?.applyDisplay(next.display.fontFamily, next.display.fontSize);
   }
 
-  /** Close this window. `close()` re-enters our close handler, which — with
-   * `closing`/`reattaching` set — lets it through instead of re-killing. */
+  /** Close this window for real. `destroy`, not `close`: a close request only
+   * re-enters our own close handler, and the window would never go away
+   * (CLAUDE.md §20 — see `destroyCurrentWindow`). */
   private async destroyWindow(): Promise<void> {
     this.closing = true;
-    await getCurrentWindow().close().catch(() => {});
+    await destroyCurrentWindow();
   }
 }

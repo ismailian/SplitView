@@ -62,6 +62,8 @@ export function defaultSettings(): Settings {
       branch: true,
       time: false,
       exitStatus: false,
+      // 0 = show the whole path (middle elided when long).
+      dirSegments: 0,
     },
     aliases: [],
     banner: "",
@@ -125,6 +127,18 @@ export const PRESETS: { name: string; colors: Partial<Record<ColorKey, string>> 
   },
 ];
 
+/** Upper bound on the prompt's trailing-directory-segment count. Past a handful
+ * of segments you are asking for the whole path, which is what `0` means. */
+export const MAX_DIR_SEGMENTS = 9;
+
+/** Clamp a stored/edited segment count to `0..MAX_DIR_SEGMENTS` (0 = full path).
+ * It ends up in the spawned shell's environment, so it must be a plain integer. */
+export function clampDirSegments(value: unknown): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n, MAX_DIR_SEGMENTS);
+}
+
 /** Keep only well-formed `{ name, command }` alias entries. */
 function sanitizeAliases(value: unknown): Alias[] {
   if (!Array.isArray(value)) return [];
@@ -150,9 +164,13 @@ export function loadSettings(): Settings {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return def;
     const parsed = JSON.parse(raw) as Partial<Settings>;
+    const promptInfo = { ...def.promptInfo, ...(parsed.promptInfo ?? {}) };
     return {
       display: { ...def.display, ...(parsed.display ?? {}) },
-      promptInfo: { ...def.promptInfo, ...(parsed.promptInfo ?? {}) },
+      promptInfo: {
+        ...promptInfo,
+        dirSegments: clampDirSegments(promptInfo.dirSegments),
+      },
       aliases: parsed.aliases ? sanitizeAliases(parsed.aliases) : def.aliases,
       banner: typeof parsed.banner === "string" ? parsed.banner : def.banner,
     };

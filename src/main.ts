@@ -37,7 +37,7 @@ import {
   stashHandoff,
   takeHandoff,
 } from "./ipc/commands";
-import { openNewWindow } from "./ipc/windows";
+import { destroyCurrentWindow, openNewWindow } from "./ipc/windows";
 import { renderLayout } from "./layout/render";
 import { Pane } from "./terminal/Pane";
 import { DetachedApp } from "./terminal/DetachedApp";
@@ -126,6 +126,8 @@ class App implements AppActions {
       onInsertPath: (path) => this.insertIntoTerminal(shellQuote(path)),
       onChangeDir: (path) => this.insertIntoTerminal(`cd ${shellQuote(path)}\r`),
       onLeave: () => this.focusedPane()?.focus(),
+      // Resizing the sidebar resizes the pane area with it.
+      onResize: () => this.refitAll(),
     });
     this.backgroundPanel = new BackgroundPanel({
       list: () => this.backgroundEntries(),
@@ -180,9 +182,10 @@ class App implements AppActions {
 
     // If this window closes while detached windows or backgrounded shells are
     // still alive, take them with it — nothing should linger with no window and
-    // no way to reach it (CLAUDE.md §20). The close is deferred until the kills
-    // are actually issued, because a window that vanishes first leaves orphaned
-    // shells behind; `closing` lets the second pass through.
+    // no way to reach it (CLAUDE.md §20). The teardown is deferred until the
+    // kills are actually issued, because a window that vanishes first leaves
+    // orphaned shells behind; `closing` makes a second close request (an
+    // impatient X while the kills are in flight) a no-op rather than a re-run.
     void getCurrentWindow()
       .onCloseRequested(async (event) => {
         if (this.closing) return;
@@ -190,9 +193,9 @@ class App implements AppActions {
         this.closing = true;
         this.closeDetachedWindows();
         await this.killAllBackgrounded();
-        await getCurrentWindow()
-          .close()
-          .catch(() => {});
+        // `destroy`, not `close`: a close request would land right back in this
+        // handler and the window would never actually go away.
+        await destroyCurrentWindow();
       })
       .catch(() => {});
 

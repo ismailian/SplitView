@@ -10,6 +10,7 @@
  */
 
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /** Matches the main window's geometry in `tauri.conf.json`. */
 const NEW_WINDOW = {
@@ -38,4 +39,27 @@ export function openNewWindow(cwd?: string | null): Promise<void> {
     void win.once("tauri://created", () => resolve());
     void win.once("tauri://error", (e) => reject(new Error(String(e.payload))));
   });
+}
+
+/**
+ * Actually close this window, for good.
+ *
+ * `close()` only *requests* a close. As soon as a window registers an
+ * `onCloseRequested` listener — every SplitView window does, to kill its shells
+ * first — Tauri prevents the native close and leaves it to the frontend, so the
+ * window is gone only once something calls `destroy()`. Calling `close()` from
+ * inside the close handler therefore just re-enters it and the window stays put:
+ * a black, unclosable window whose X button does nothing (CLAUDE.md §20).
+ *
+ * `destroy()` needs `core:window:allow-destroy` in `capabilities/default.json`;
+ * the `close()` fallback is a last resort if a window's label somehow isn't
+ * covered by that capability.
+ */
+export async function destroyCurrentWindow(): Promise<void> {
+  const win = getCurrentWindow();
+  try {
+    await win.destroy();
+  } catch {
+    await win.close().catch(() => {});
+  }
 }
