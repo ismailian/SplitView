@@ -146,7 +146,8 @@ splitview/
 │   │   ├── render.ts          ← maps tree -> DOM, draws dividers
 │   │   └── divider.ts         ← draggable 1px separators
 │   ├── sidebar/
-│   │   └── FileTree.ts        ← terminal-styled filesystem sidebar
+│   │   ├── FileTree.ts        ← terminal-styled filesystem sidebar (live, per-pane views)
+│   │   └── model.ts           ← tree rows + watch set as pure functions (TESTED)
 │   ├── background/
 │   │   └── BackgroundPanel.ts ← backgrounded-pane indicator + picker
 │   ├── settings/              ← in-app Settings window (model + DOM)
@@ -173,6 +174,7 @@ splitview/
         ├── state.rs           ← AppState, PtyHandle, PaneId
         ├── pty.rs             ← spawn/read/write/resize/kill via portable-pty
         ├── shell.rs           ← shell detection + prompt injection (see §8)
+        ├── watch.rs           ← file-sidebar filesystem watch (notify), debounced
         └── commands.rs        ← #[tauri::command] functions
 ```
 
@@ -373,8 +375,14 @@ the count whenever any exist, closing the window kills them, and closing the
 ### The file sidebar
 
 A `tree(1)`-styled column left of the pane area, outside the layout tree (it is
-not a pane and has no PTY). It roots itself at the focused terminal's directory —
-the cwd the shell reports over OSC 7 — and is navigated with `j`/`k`, `l`/`h` to
+not a pane and has no PTY). It follows the focused terminal: it shows that pane's
+directory — the cwd the shell reports over OSC 7 — and re-roots when focus moves
+or the shell `cd`s. Each pane has its own view (open folders, cursor, scroll),
+kept in memory while the app runs, so switching panes and back finds the tree as
+it was. It is live: while open, the backend watches exactly the directories on
+screen (`fs_watch*`, `watch.rs`) and the tree re-reads the ones where an entry was
+created, removed or renamed — content writes are ignored, bursts are coalesced
+(~120 ms), and only changed rows are re-rendered. It is navigated with `j`/`k`, `l`/`h` to
 fold, Enter to expand a directory or insert a file's path at the prompt, `c` to
 `cd` the terminal there, `u` to go up, `.` for hidden files, `r` to reload,
 `<`/`>` to narrow/widen the column (`=` resets it; the edge can also be dragged,
@@ -410,6 +418,9 @@ Keep all Tauri calls behind typed wrappers in `src/ipc/commands.ts`. Never call
 | `close_pty` | `(pane_id: PaneId) -> Result<()>` | Kill child, drop master, remove handle. |
 | `list_panes` | `() -> Result<Vec<PaneId>>` | Mostly for debugging/recovery. |
 | `read_dir` | `(path: Option<String>) -> Result<DirListing>` | Directory listing for the file sidebar. Accepts msys paths (normalized), sorts dirs-first, caps the entry count. |
+| `fs_watch` | `(window, on_change: Channel<Vec<String>>) -> Result<()>` | Start the calling window's sidebar watch; batches of changed directories arrive on the channel. Dropped automatically when the window is destroyed. |
+| `fs_watch_dirs` | `(window, dirs: Vec<String>) -> Result<()>` | Replace the watched set (the sidebar's root + open folders); only the delta reaches the OS. |
+| `fs_unwatch` | `(window) -> Result<()>` | Stop the window's watch (sidebar closed). |
 
 `SpawnOpts` includes optional `cwd`, optional `shell` override, and the prompt
 template (or the backend reads it from loaded config).
@@ -643,6 +654,19 @@ npm run test        # vitest (layout tree, keymap)
 - **Resize mismatch.** If xterm.js cols/rows and the PTY size drift apart, output
   wraps wrong and full-screen TUIs corrupt. Always resize both, together.
 - **macOS non-login shell** → missing PATH/Homebrew. Spawn a login shell.
+- **No locale = garbled line editing.** A GUI app often has no `LANG` (always on
+  Windows, on macOS from the Dock), and `--rcfile` skips the profile that sets
+  one, so bash runs in the "C" locale and measures the prompt's `└──╼` in bytes
+  (12) instead of columns (4). Every full-line redraw — dropping the highlight
+  after a bracketed paste, history recall — then lands 8 columns off and
+  duplicates text. `ensure_utf8_locale` in `shell.rs` sets `LC_CTYPE` when no
+  locale variable is set; keep it.
+- **Watching a directory on Windows locks its ancestors.** ReadDirectoryChangesW
+  holds a handle, and a directory can't be renamed or deleted while a handle
+  inside it is open, so per-folder watches break `mv` and `git checkout` in the
+  terminal. `watch.rs` watches only the outermost directory (recursively) on
+  Windows and filters events back down; don't "simplify" it to one watch per
+  open folder.
 - **Recreating terminals on layout change** loses scrollback and flickers.
   Re-parent the existing xterm.js DOM node instead.
 

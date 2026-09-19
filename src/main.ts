@@ -221,12 +221,27 @@ class App implements AppActions {
       pane.setFontSize(this.fontSize);
     const id = pane.id;
     if (id) this.panes.set(id, pane);
+    this.wirePane(pane, id);
+    return pane;
+  }
+
+  /** Connect a pane's callbacks to this controller (new and reattached panes). */
+  private wirePane(pane: Pane, id: string | null): void {
     // Mouse clicks focus a pane's terminal directly; mirror that into the layout
     // so the next split/move/zoom acts on the pane the user is actually in.
     pane.onFocus = () => this.onPaneFocused(id);
     // The injected `splitview` shell command reaches us as an app command.
     pane.onAppCommand = (cmd) => this.onAppCommand(cmd);
-    return pane;
+    // The sidebar follows the focused shell into whatever directory it `cd`s to.
+    pane.onCwdChange = () => {
+      if (id !== null && id === this.layout.focused) this.syncSidebar();
+    };
+  }
+
+  /** Point the file sidebar at the focused pane: its own view, its directory.
+   * Cheap when neither changed, so it runs after every focus change. */
+  private syncSidebar(): void {
+    this.fileTree.follow(this.layout.focused, this.focusedPane()?.cwd ?? null);
   }
 
   /** Base config with the live Display font folded in (CLAUDE.md §12). */
@@ -247,6 +262,7 @@ class App implements AppActions {
     if (!id || id === this.layout.focused || !this.panes.has(id)) return;
     this.layout = { ...this.layout, focused: id };
     this.render();
+    this.syncSidebar();
   }
 
   // --- key handling ------------------------------------------------------
@@ -334,6 +350,7 @@ class App implements AppActions {
     this.layout = layout;
     this.render();
     this.focusedPane()?.focus();
+    this.syncSidebar();
   }
 
   // --- AppActions --------------------------------------------------------
@@ -398,6 +415,7 @@ class App implements AppActions {
         // (keep the PTY alive via detachDispose, not dispose).
         const { layout } = closePane(this.layout, id);
         this.panes.delete(id);
+        this.fileTree.forget(id);
         pane.detachDispose();
         this.commit(layout);
       } catch {
@@ -422,16 +440,17 @@ class App implements AppActions {
   }
 
   /**
-   * Cycle the file sidebar: closed → open (rooted at the focused terminal's
-   * directory, reported over OSC 7) → focused-from-the-terminal → closed. The
-   * middle step matters because the sidebar loses focus as soon as you insert a
-   * path or `cd`, and the same key should take you back to the tree rather than
-   * closing it. Opening/closing changes the pane area's width, so the terminals
-   * are refit (CLAUDE.md §20 — xterm and the PTY must resize together).
+   * Cycle the file sidebar: closed → open (on the focused pane's view, rooted at
+   * its terminal's directory, reported over OSC 7) → focused-from-the-terminal →
+   * closed. The middle step matters because the sidebar loses focus as soon as
+   * you insert a path or `cd`, and the same key should take you back to the tree
+   * rather than closing it. Once open, the tree follows focus and `cd` by itself
+   * (`syncSidebar`). Opening/closing changes the pane area's width, so the
+   * terminals are refit (CLAUDE.md §20 — xterm and the PTY must resize together).
    */
   toggleSidebar(): void {
     if (!this.fileTree.isOpen) {
-      this.fileTree.open(this.focusedPane()?.cwd ?? null);
+      this.fileTree.open(this.layout.focused, this.focusedPane()?.cwd ?? null);
     } else if (!this.fileTree.isFocused) {
       this.fileTree.focus(); // already open, just go there — no resize
       return;
@@ -503,6 +522,7 @@ class App implements AppActions {
     const entry = this.backgrounded.get(id);
     if (!entry) return;
     this.backgrounded.delete(id);
+    this.fileTree.forget(id);
     void entry.pane.dispose();
     this.backgroundPanel.update();
   }
@@ -549,6 +569,7 @@ class App implements AppActions {
     if (removedPaneId) {
       const pane = this.panes.get(removedPaneId);
       this.panes.delete(removedPaneId);
+      this.fileTree.forget(removedPaneId);
       void pane?.dispose();
     }
     this.commit(layout);
@@ -572,8 +593,7 @@ class App implements AppActions {
     const pane = await Pane.attach(this.effectiveConfig(), id, serialized);
     if (this.fontSize !== this.settings.display.fontSize)
       pane.setFontSize(this.fontSize);
-    pane.onFocus = () => this.onPaneFocused(id);
-    pane.onAppCommand = (cmd) => this.onAppCommand(cmd);
+    this.wirePane(pane, id);
     this.panes.set(id, pane);
 
     // Splice beside the focused pane, inheriting focus (or seed an empty layout).

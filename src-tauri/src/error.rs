@@ -17,6 +17,9 @@ pub enum Error {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("watch error: {0}")]
+    Watch(String),
+
     #[error("state lock poisoned")]
     Poisoned,
 }

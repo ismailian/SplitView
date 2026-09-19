@@ -66,6 +66,11 @@ export class Pane {
    * Lets the user drive SplitView from the terminal (CLAUDE.md §1).
    */
   onAppCommand: ((cmd: string) => void) | null = null;
+  /**
+   * Called when the shell reports a working directory different from the last
+   * one (a `cd`), not on every prompt. Lets the file sidebar follow the shell.
+   */
+  onCwdChange: ((cwd: string) => void) | null = null;
   /** Latest working directory reported by the shell via OSC 7, if any. */
   private currentCwd: string | null = null;
   /** Latest terminal title (OSC 0/2), used to name a backgrounded pane. */
@@ -101,7 +106,10 @@ export class Pane {
     // `splitview` shell function emits it (e.g. `splitview settings`).
     term.parser.registerOscHandler(7, (data) => {
       const p = parseOsc7(data);
-      if (p) pane.currentCwd = p;
+      if (p && p !== pane.currentCwd) {
+        pane.currentCwd = p;
+        if (!pane.disposed) pane.onCwdChange?.(p);
+      }
       return true;
     });
     term.parser.registerOscHandler(5170, (data) => {
@@ -160,6 +168,9 @@ export class Pane {
   /** Create a pane, mount xterm.js, and spawn its PTY. */
   static async create(cfg: Config, spawn: SpawnExtras = {}): Promise<Pane> {
     const pane = Pane.mount(cfg);
+    // Until the shell's first prompt reports its cwd, assume the directory it was
+    // started in — so the sidebar doesn't flash the home directory in between.
+    pane.currentCwd = spawn.cwd ?? null;
 
     const id = await spawnPty(
       {

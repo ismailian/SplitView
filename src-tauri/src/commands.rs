@@ -15,6 +15,7 @@ use crate::error::{Error, Result};
 use crate::pty;
 use crate::shell::{normalize_cwd, Alias, PromptInfo, PromptStyle, ShellConfig};
 use crate::state::{AppState, PaneId};
+use crate::watch::DirWatch;
 
 /// Options for spawning a pane's shell. Field names are camelCase to match the
 /// JS side; Tauri maps them onto this struct.
@@ -336,6 +337,58 @@ pub async fn read_dir(path: Option<String>) -> Result<DirListing> {
         entries,
         truncated,
     })
+}
+
+/// Start this window's file-sidebar watch. Changed directories arrive on
+/// `on_change` in batches, spelled exactly as they were passed to
+/// [`fs_watch_dirs`]. Replaces any watch the window already had (a reloaded page
+/// subscribes again). Watches nothing until `fs_watch_dirs` says what to.
+///
+/// `async` (like the other watch commands) so OS watch registration stays off
+/// the main thread.
+#[tauri::command]
+pub async fn fs_watch(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    on_change: Channel<Vec<String>>,
+) -> Result<()> {
+    let watch = DirWatch::new(on_change)?;
+    let previous = state
+        .watchers
+        .lock()
+        .map_err(|_| Error::Poisoned)?
+        .insert(window.label().to_string(), watch);
+    drop(previous); // outside the lock: dropping a watch talks to the OS
+    Ok(())
+}
+
+/// Set the directories this window's sidebar displays — its root and open
+/// folders, as native paths from `read_dir`. Only the difference from the last
+/// set is registered or released. A no-op if the window has no watch.
+#[tauri::command]
+pub async fn fs_watch_dirs(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+    dirs: Vec<String>,
+) -> Result<()> {
+    let mut watchers = state.watchers.lock().map_err(|_| Error::Poisoned)?;
+    match watchers.get_mut(window.label()) {
+        Some(watch) => watch.set_dirs(dirs),
+        None => Ok(()),
+    }
+}
+
+/// Stop this window's sidebar watch (the sidebar closed): every OS watch is
+/// released and its thread ends.
+#[tauri::command]
+pub async fn fs_unwatch(window: tauri::Window, state: State<'_, AppState>) -> Result<()> {
+    let watch = state
+        .watchers
+        .lock()
+        .map_err(|_| Error::Poisoned)?
+        .remove(window.label());
+    drop(watch);
+    Ok(())
 }
 
 /// Open the OS-native file picker and return the absolute path of the selected

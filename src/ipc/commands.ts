@@ -154,6 +154,29 @@ export async function readDir(path?: string | null): Promise<DirListing> {
 }
 
 /**
+ * Start this window's file-sidebar watch. `onChange` receives batches of
+ * directories whose listing changed (an entry was created, removed or renamed),
+ * spelled exactly as they were passed to `fsWatchDirs`. Replaces any earlier
+ * watch of this window, and watches nothing until `fsWatchDirs` says what to.
+ */
+export async function fsWatch(onChange: (dirs: string[]) => void): Promise<void> {
+  const channel = new Channel<string[]>();
+  channel.onmessage = onChange;
+  await invoke("fs_watch", { onChange: channel });
+}
+
+/** Set the directories the sidebar displays — its root and open folders, as the
+ * native paths `readDir` returned. Only the difference reaches the OS. */
+export async function fsWatchDirs(dirs: string[]): Promise<void> {
+  await invoke("fs_watch_dirs", { dirs });
+}
+
+/** Stop this window's sidebar watch, releasing every OS watch it held. */
+export async function fsUnwatch(): Promise<void> {
+  await invoke("fs_unwatch");
+}
+
+/**
  * Show the OS-native file picker and return the selected absolute path, or
  * `null` if the user cancelled. The dialog is driven entirely by the backend
  * `pick_file` command (CLAUDE.md §10 — no `invoke` outside this module).

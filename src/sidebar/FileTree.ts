@@ -1,10 +1,22 @@
 /**
  * The file sidebar: a terminal-styled filesystem tree (CLAUDE.md §1, §14).
  *
- * It opens on whatever directory the focused terminal is in (reported by the
- * shell over OSC 7) and is fully keyboard-driven — j/k to move, l/Enter to
- * expand, `c` to `cd` the terminal there, Enter on a file to insert its path at
- * the prompt. The mouse is a convenience, never a requirement (CLAUDE.md §2.1).
+ * It follows the focused terminal. Whichever pane has focus, the tree shows that
+ * pane's view, rooted at its shell's directory (reported over OSC 7), and
+ * re-roots when the shell `cd`s. Each pane keeps its own view — open folders,
+ * cursor, scroll position — for as long as the app runs, so switching away and
+ * back finds the tree as it was left.
+ *
+ * It is live. While open, the directories on screen are watched by the backend
+ * (`fs_watch*`, see `src-tauri/src/watch.rs`) and re-read when an entry in them
+ * is created, removed or renamed — from the terminal or anywhere else. The cost
+ * stays proportional to what is visible: only displayed directories are watched,
+ * only the ones that changed are re-read, a re-read that changed nothing renders
+ * nothing, and a render rebuilds only the rows that differ.
+ *
+ * Fully keyboard-driven — j/k to move, l/Enter to expand, `c` to `cd` the
+ * terminal there, Enter on a file to insert its path at the prompt. The mouse is
+ * a convenience, never a requirement (CLAUDE.md §2.1).
  *
  * Rendering is deliberately plain: monospace rows with `├──`/`└──` connectors
  * drawn as text, coloured from the theme's ANSI variables, so the sidebar reads
@@ -12,8 +24,23 @@
  * DOM is built imperatively like the rest of the app (CLAUDE.md §3).
  */
 
-import { readDir, type DirEntryInfo } from "../ipc/commands";
+import {
+  fsUnwatch,
+  fsWatch,
+  fsWatchDirs,
+  readDir,
+  type DirEntryInfo,
+  type DirListing,
+} from "../ipc/commands";
 import { compactPath, toShellPath } from "../paths";
+import {
+  buildTree,
+  connectors,
+  sameEntries,
+  selectionIndex,
+  type Listing,
+  type Row,
+} from "./model";
 
 export interface FileTreeDeps {
   /** Insert a path at the focused terminal's prompt (shell-quoted, no newline). */
@@ -38,65 +65,83 @@ const WIDTH_STEP = 20;
 /** Where the chosen width persists (the sidebar owns this bit of UI state; the
  * Settings window has no business with it). */
 const WIDTH_KEY = "splitview.sidebar.width";
+/** Listings kept before those no view refers to any more are dropped. */
+const CACHE_LIMIT = 256;
 
-/** One node of the tree. Children are loaded lazily, on first expand. */
-interface FsNode {
-  name: string;
-  /** Absolute **native** path (as returned by the backend). */
-  path: string;
-  isDir: boolean;
-  isSymlink: boolean;
-  hidden: boolean;
-  expanded: boolean;
+/** A directory's listing plus the bookkeeping for re-reading it. */
+interface DirState extends Listing {
+  /** A read is in flight. */
   loading: boolean;
-  error: string | null;
-  children: FsNode[] | null;
+  /** A change arrived during that read, so read once more when it lands. */
+  again: boolean;
+  /** `FileTree.tick` when the latest read started. */
+  started: number;
+  /** `FileTree.tick` of the read whose result is stored; an older read that
+   * lands late is discarded. */
+  filled: number;
 }
 
-/** A flattened, visible row: the node plus how to draw its connectors. */
-interface Row {
-  node: FsNode;
-  depth: number;
-  /** For each ancestor level, whether that ancestor was the last of its group
-   * (decides `│  ` vs `   `); the final entry decides `├──` vs `└──`. */
-  lastFlags: boolean[];
-}
-
-function nodeOf(e: DirEntryInfo): FsNode {
-  return {
-    name: e.name,
-    path: e.path,
-    isDir: e.isDir,
-    isSymlink: e.isSymlink,
-    hidden: e.hidden,
-    expanded: false,
-    loading: false,
-    error: null,
-    children: null,
-  };
+/** One pane's view of the tree, kept while the app runs. */
+interface View {
+  /** The cwd this view was last rooted at, as the shell reported it — so the
+   * same directory reported again at the next prompt doesn't undo moving the
+   * root with `u`. `undefined` until first rooted. */
+  cwd: string | null | undefined;
+  /** The directory at the top (native path), "" until the first read lands. */
+  root: string;
+  /** Open folders by path. Kept when an ancestor closes or the root moves, so
+   * they come back open. */
+  open: Set<string>;
+  /** The entry under the cursor, by path, so it survives rows changing above it. */
+  selected: string | null;
+  scrollTop: number;
+  /** Discards a slow root read that a newer one superseded. */
+  seq: number;
 }
 
 export class FileTree {
   /** Stable root element; the controller parents it next to the layout. */
   readonly el: HTMLElement;
-  private readonly headerEl: HTMLElement;
+  private readonly rootEl: HTMLElement;
   private readonly bodyEl: HTMLElement;
   private readonly footerEl: HTMLElement;
 
   private open_ = false;
   private focused = false;
-  private rootPath = "";
-  private parentPath: string | null = null;
-  private roots: FsNode[] = [];
-  private rows: Row[] = [];
-  private selected = 0;
   private showHidden = false;
-  private truncated = false;
-  private error: string | null = null;
-  /** Guards against a slow listing landing after the user re-rooted the tree. */
-  private loadSeq = 0;
   /** Current width in px, restored from the last session. */
   private width = loadWidth();
+
+  /** Listings by directory, shared by every view. */
+  private readonly dirs = new Map<string, DirState>();
+  /** Views by pane id. */
+  private readonly views = new Map<string, View>();
+  /** The view on screen, if any. */
+  private view: View | null = null;
+  /** The pane (and its cwd) to show — recorded while closed, applied on open. */
+  private target: { key: string; cwd: string | null } = { key: "", cwd: null };
+
+  private rows: Row[] = [];
+  private index = 0;
+  /** Directories on screen at the last render. */
+  private shown: string[] = [];
+  /** Row elements by entry path, with the text they were drawn from, so a
+   * render reuses every row that looks the same. */
+  private rowEls = new Map<string, { el: HTMLElement; sig: string }>();
+  private selectedEl: HTMLElement | null = null;
+  private renderFrame = 0;
+  /** Monotonic counter ordering reads and watch requests (see `DirState`). */
+  private tick = 0;
+
+  /** Watch IPC runs strictly in order: start, set, stop can't cross. */
+  private watchOps: Promise<void> = Promise.resolve();
+  /** The watch set the screen wants, and the last one the backend accepted
+   * (as `\n`-joined keys, null for none). */
+  private wantDirs: string[] = [];
+  private wantKey: string | null = null;
+  private sentKey: string | null = null;
+  private watched = new Set<string>();
+  private pumpQueued = false;
 
   constructor(private readonly deps: FileTreeDeps) {
     this.el = document.createElement("aside");
@@ -105,8 +150,10 @@ export class FileTree {
     this.el.style.display = "none";
     this.el.style.width = `${this.width}px`;
 
-    this.headerEl = document.createElement("div");
-    this.headerEl.className = "ft-header";
+    const header = document.createElement("div");
+    header.className = "ft-header";
+    this.rootEl = span("ft-root", "");
+    header.appendChild(this.rootEl);
     this.bodyEl = document.createElement("div");
     this.bodyEl.className = "ft-body";
     this.footerEl = document.createElement("div");
@@ -121,7 +168,7 @@ export class FileTree {
     resizer.title = "Drag to resize (or < / > / = from the tree)";
     this.attachResize(resizer);
 
-    this.el.append(this.headerEl, this.bodyEl, this.footerEl, resizer);
+    this.el.append(header, this.bodyEl, this.footerEl, resizer);
 
     this.el.addEventListener("focus", () => {
       this.focused = true;
@@ -130,6 +177,22 @@ export class FileTree {
     this.el.addEventListener("blur", () => {
       this.focused = false;
       this.el.classList.remove("focused");
+    });
+
+    // Mouse convenience: click selects (and toggles a folder), double-click
+    // inserts a file's path. One listener for every row, so rows carry no
+    // handlers of their own. All of it is reachable from the keyboard too.
+    this.bodyEl.addEventListener("mousedown", (ev) => {
+      const row = this.rowAt(ev.target);
+      if (!row) return;
+      ev.preventDefault(); // keep focus on the sidebar
+      this.el.focus();
+      this.select(this.rows.indexOf(row));
+      if (row.entry.isDir) this.activate(row);
+    });
+    this.bodyEl.addEventListener("dblclick", (ev) => {
+      const row = this.rowAt(ev.target);
+      if (row && !row.entry.isDir) this.activate(row);
     });
 
     // A window that shrank can leave a previously fine width taking the whole
@@ -149,26 +212,87 @@ export class FileTree {
   }
 
   /**
-   * Show the sidebar rooted at `cwd` (the focused terminal's directory; msys
-   * form is fine — the backend normalizes it) and take focus. Re-opening always
-   * re-roots, so toggling it is how you follow the terminal to a new directory.
+   * Show the sidebar on pane `key`'s view, rooted at that shell's `cwd` (msys
+   * form is fine — the backend normalizes it), start watching, and take focus.
    */
-  open(cwd: string | null): void {
-    this.open_ = true;
-    this.el.style.display = "flex";
-    this.setWidth(this.width); // re-clamp: the window may have shrunk since
-    void this.setRoot(cwd);
+  open(key: string | null, cwd: string | null): void {
+    this.target = { key: key ?? "", cwd };
+    if (!this.open_) {
+      this.open_ = true;
+      this.el.style.display = "flex";
+      this.setWidth(this.width); // re-clamp: the window may have shrunk since
+      this.enqueueWatch(async () => {
+        await fsWatch((dirs) => this.onDirsChanged(dirs)).catch(() => {});
+        this.resetWatched();
+      });
+    }
+    this.sync();
     this.el.focus();
   }
 
+  /** Hide the sidebar and release its watch; every view is kept for next time. */
   close(): void {
+    if (!this.open_) return;
     this.open_ = false;
     this.el.style.display = "none";
+    if (this.view) this.view.scrollTop = this.bodyEl.scrollTop;
+    this.view = null;
+    this.wantKey = null;
+    this.enqueueWatch(async () => {
+      await fsUnwatch().catch(() => {});
+      this.resetWatched();
+    });
   }
 
   /** Focus the sidebar without re-rooting it (it is already open). */
   focus(): void {
     this.el.focus();
+  }
+
+  /**
+   * The focused pane changed, or its shell changed directory: show that pane's
+   * view. Cheap when neither did, so the controller can call it after every
+   * layout change. While closed it only records the target.
+   */
+  follow(key: string | null, cwd: string | null): void {
+    this.target = { key: key ?? "", cwd };
+    if (this.open_) this.sync();
+  }
+
+  /** A pane is gone for good (closed, killed, detached): drop its view. */
+  forget(key: string): void {
+    const view = this.views.get(key);
+    if (!view) return;
+    this.views.delete(key);
+    view.seq++; // its in-flight root read has nowhere to land
+    if (view === this.view) this.view = null;
+  }
+
+  /** Bring the screen in line with `target`. */
+  private sync(): void {
+    const { key, cwd } = this.target;
+    let view = this.views.get(key);
+    if (!view) {
+      view = {
+        cwd: undefined,
+        root: "",
+        open: new Set(),
+        selected: null,
+        scrollTop: 0,
+        seq: 0,
+      };
+      this.views.set(key, view);
+    }
+    if (view !== this.view) {
+      if (this.view) this.view.scrollTop = this.bodyEl.scrollTop;
+      this.view = view;
+      this.render();
+      this.bodyEl.scrollTop = view.scrollTop;
+    }
+    if (cwd !== view.cwd) {
+      view.cwd = cwd;
+      this.reroot(view, cwd);
+    }
   }
 
   // --- width -------------------------------------------------------------
@@ -238,48 +362,170 @@ export class FileTree {
 
   // --- loading -----------------------------------------------------------
 
-  private async setRoot(path: string | null): Promise<void> {
-    const seq = ++this.loadSeq;
-    this.error = null;
-    try {
-      const listing = await readDir(path);
-      if (seq !== this.loadSeq) return; // superseded by a newer navigation
-      this.rootPath = listing.path;
-      this.parentPath = listing.parent;
-      this.roots = listing.entries.map(nodeOf);
-      this.truncated = listing.truncated;
-      this.selected = 0;
-    } catch (e) {
-      if (seq !== this.loadSeq) return;
-      this.rootPath = path ?? "";
-      this.parentPath = null;
-      this.roots = [];
-      this.truncated = false;
-      this.error = message(e);
+  private dir(path: string): DirState {
+    let state = this.dirs.get(path);
+    if (!state) {
+      state = {
+        entries: null,
+        parent: null,
+        truncated: false,
+        error: null,
+        loading: false,
+        again: false,
+        started: -1,
+        filled: -1,
+      };
+      this.dirs.set(path, state);
     }
-    this.render();
+    return state;
   }
 
-  /** Load a directory node's children, then re-render in place. */
-  private async loadChildren(node: FsNode): Promise<void> {
-    if (node.children || node.loading) return;
-    node.loading = true;
-    node.error = null;
-    this.render();
-    try {
-      const listing = await readDir(node.path);
-      node.children = listing.entries.map(nodeOf);
-    } catch (e) {
-      node.children = [];
-      node.error = message(e);
-    }
-    node.loading = false;
-    this.render();
+  /**
+   * Root `view` at `path` — a shell cwd, or a native path when moving up. The
+   * root's native spelling is only known once the backend has read it, so the
+   * listing is filed under what it reports.
+   */
+  private reroot(view: View, path: string | null): void {
+    const seq = ++view.seq;
+    const tick = this.tick++;
+    const moveTo = (root: string): void => {
+      if (view.root !== root) {
+        view.root = root;
+        view.selected = null;
+        view.scrollTop = 0;
+        if (view === this.view) this.bodyEl.scrollTop = 0;
+      }
+      if (view === this.view) this.render();
+    };
+    readDir(path).then(
+      (listing) => {
+        if (seq !== view.seq) return; // superseded by a newer navigation
+        const state = this.dir(listing.path);
+        state.started = Math.max(state.started, tick);
+        this.fill(state, listing, tick);
+        moveTo(listing.path);
+      },
+      (e: unknown) => {
+        if (seq !== view.seq) return;
+        const root = path ?? "";
+        this.fail(this.dir(root), message(e), tick);
+        moveTo(root);
+      },
+    );
   }
 
-  /** Reload the current root, dropping every expansion. */
+  /**
+   * (Re-)read one directory. A request while a read is in flight queues exactly
+   * one more read, however many changes arrive meanwhile.
+   */
+  private load(path: string): void {
+    const state = this.dir(path);
+    if (state.loading) {
+      state.again = true;
+      return;
+    }
+    state.loading = true;
+    const tick = (state.started = this.tick++);
+    readDir(path)
+      .then(
+        (listing) => this.fill(state, listing, tick),
+        (e: unknown) => this.fail(state, message(e), tick),
+      )
+      .then((changed) => {
+        if (changed) this.scheduleRender();
+      })
+      .finally(() => {
+        state.loading = false;
+        if (state.again) {
+          state.again = false;
+          this.load(path);
+        }
+      });
+  }
+
+  /** Store a read unless a newer one already landed; true if the display changes. */
+  private fill(state: DirState, listing: DirListing, tick: number): boolean {
+    if (tick < state.filled) return false;
+    state.filled = tick;
+    const changed =
+      state.error !== null ||
+      state.truncated !== listing.truncated ||
+      !sameEntries(state.entries, listing.entries);
+    state.parent = listing.parent;
+    if (changed) {
+      state.entries = listing.entries;
+      state.truncated = listing.truncated;
+      state.error = null;
+    }
+    return changed;
+  }
+
+  /** Record a failed read (the directory went away, or can't be read). */
+  private fail(state: DirState, error: string, tick: number): boolean {
+    if (tick < state.filled) return false;
+    state.filled = tick;
+    const changed = state.error !== error;
+    state.entries = [];
+    state.truncated = false;
+    state.error = error;
+    return changed;
+  }
+
+  /** `r`: re-read everything on screen (and retry an unreadable root). */
   refresh(): void {
-    void this.setRoot(this.rootPath || null);
+    const view = this.view;
+    if (!view) return;
+    const root = this.dirs.get(view.root);
+    if (!root || root.error) this.reroot(view, view.root || view.cwd || null);
+    for (const dir of this.shown) this.load(dir);
+  }
+
+  // --- watching ----------------------------------------------------------
+
+  private enqueueWatch(op: () => Promise<void>): void {
+    this.watchOps = this.watchOps.then(op).catch(() => {});
+  }
+
+  /** The backend's watch set is empty (a watch just started or stopped). */
+  private resetWatched(): void {
+    this.watched = new Set();
+    this.sentKey = null;
+  }
+
+  /** The screen shows `dirs`: make that the watch set. Coalesced — a burst of
+   * renders sends one update, with whatever the screen shows by then. */
+  private wantWatch(dirs: string[]): void {
+    const key = dirs.join("\n");
+    if (key === this.wantKey) return;
+    this.wantKey = key;
+    this.wantDirs = dirs;
+    if (this.pumpQueued) return;
+    this.pumpQueued = true;
+    this.enqueueWatch(() => this.pumpWatch());
+  }
+
+  private async pumpWatch(): Promise<void> {
+    this.pumpQueued = false;
+    const key = this.wantKey;
+    const dirs = this.wantDirs;
+    if (!this.open_ || key === null || key === this.sentKey) return;
+    const tick = this.tick++;
+    await fsWatchDirs(dirs).catch(() => {});
+    const before = this.watched;
+    this.watched = new Set(dirs);
+    this.sentKey = key;
+    // A directory that just came into view wasn't watched a moment ago, so its
+    // cached listing may be stale — unless a read started after the watch did.
+    for (const dir of dirs) {
+      const state = this.dirs.get(dir);
+      if (!before.has(dir) && (!state || state.started < tick)) this.load(dir);
+    }
+  }
+
+  /** The backend saw entries change in these directories. */
+  private onDirsChanged(dirs: string[]): void {
+    if (!this.open_) return;
+    for (const dir of dirs) if (this.watched.has(dir)) this.load(dir);
   }
 
   // --- keyboard ----------------------------------------------------------
@@ -291,16 +537,16 @@ export class FileTree {
    */
   handleKey(ev: KeyboardEvent): boolean {
     if (ev.ctrlKey || ev.altKey || ev.metaKey) return false;
-    const row = this.rows[this.selected];
+    const row = this.rows[this.index];
 
     switch (ev.key) {
       case "j":
       case "ArrowDown":
-        this.select(this.selected + 1);
+        this.select(this.index + 1);
         return true;
       case "k":
       case "ArrowUp":
-        this.select(this.selected - 1);
+        this.select(this.index - 1);
         return true;
       case "g":
       case "Home":
@@ -311,24 +557,24 @@ export class FileTree {
         this.select(this.rows.length - 1);
         return true;
       case "PageDown":
-        this.select(this.selected + 10);
+        this.select(this.index + 10);
         return true;
       case "PageUp":
-        this.select(this.selected - 10);
+        this.select(this.index - 10);
         return true;
       case "l":
       case "ArrowRight":
-        if (row?.node.isDir) this.expand(row.node);
+        if (row) this.setOpen(row.entry, true);
         return true;
       case "h":
       case "ArrowLeft":
         this.collapseOrParent();
         return true;
       case "Enter":
-        if (row) this.activate(row.node);
+        if (row) this.activate(row);
         return true;
       case "c":
-        if (row) this.changeDir(row.node);
+        if (row) this.changeDir(row.entry);
         return true;
       case "u":
       case "Backspace":
@@ -360,28 +606,31 @@ export class FileTree {
   }
 
   private select(index: number): void {
-    if (this.rows.length === 0) return;
-    this.selected = Math.max(0, Math.min(this.rows.length - 1, index));
-    this.paintSelection();
+    if (this.rows.length === 0 || !this.view) return;
+    this.index = Math.max(0, Math.min(this.rows.length - 1, index));
+    this.view.selected = this.rows[this.index].entry.path;
+    this.paintSelection(true);
   }
 
-  private expand(node: FsNode): void {
-    if (!node.isDir) return;
-    node.expanded = true;
-    if (!node.children) void this.loadChildren(node);
-    else this.render();
+  /** Open or close a folder. Opening one that isn't cached shows it loading;
+   * the read follows once it is watched (see `pumpWatch`). */
+  private setOpen(entry: DirEntryInfo, open: boolean): void {
+    const view = this.view;
+    if (!view || !entry.isDir || open === view.open.has(entry.path)) return;
+    if (open) view.open.add(entry.path);
+    else view.open.delete(entry.path);
+    this.render();
   }
 
-  /** `h`: collapse an expanded directory, else jump to the parent row. */
+  /** `h`: close an open folder, else jump to the parent row. */
   private collapseOrParent(): void {
-    const row = this.rows[this.selected];
+    const row = this.rows[this.index];
     if (!row) return;
-    if (row.node.isDir && row.node.expanded) {
-      row.node.expanded = false;
-      this.render();
+    if (row.open) {
+      this.setOpen(row.entry, false);
       return;
     }
-    for (let i = this.selected - 1; i >= 0; i--) {
+    for (let i = this.index - 1; i >= 0; i--) {
       if (this.rows[i].depth < row.depth) {
         this.select(i);
         return;
@@ -389,119 +638,154 @@ export class FileTree {
     }
   }
 
-  /** Enter: toggle a directory, or insert a file's path at the prompt. */
-  private activate(node: FsNode): void {
-    if (node.isDir) {
-      if (node.expanded) {
-        node.expanded = false;
-        this.render();
-      } else {
-        this.expand(node);
-      }
-      return;
-    }
-    this.deps.onInsertPath(toShellPath(node.path));
+  /** Enter: toggle a folder, or insert a file's path at the prompt. */
+  private activate(row: Row): void {
+    if (row.entry.isDir) this.setOpen(row.entry, !row.open);
+    else this.deps.onInsertPath(toShellPath(row.entry.path));
   }
 
-  /** `c`: cd the terminal into this directory (or a file's directory). */
-  private changeDir(node: FsNode): void {
-    const dir = node.isDir ? node.path : dirNameOf(node.path, this.rootPath);
+  /** `c`: cd the terminal into this directory (or a file's directory). The tree
+   * follows on its own once the shell reports the new cwd. */
+  private changeDir(entry: DirEntryInfo): void {
+    const dir = entry.isDir ? entry.path : dirNameOf(entry.path, this.view?.root ?? "");
     this.deps.onChangeDir(toShellPath(dir));
   }
 
   /** `u`: re-root one directory up. */
   private goUp(): void {
-    if (this.parentPath) void this.setRoot(this.parentPath);
+    const view = this.view;
+    const parent = view ? this.dirs.get(view.root)?.parent : null;
+    if (view && parent) this.reroot(view, parent);
   }
 
   // --- rendering ---------------------------------------------------------
 
-  private visibleChildren(nodes: FsNode[]): FsNode[] {
-    return this.showHidden ? nodes : nodes.filter((n) => !n.hidden);
-  }
-
-  private flatten(nodes: FsNode[], lastFlags: boolean[], out: Row[]): void {
-    const visible = this.visibleChildren(nodes);
-    visible.forEach((node, i) => {
-      const isLast = i === visible.length - 1;
-      const flags = [...lastFlags, isLast];
-      out.push({ node, depth: lastFlags.length, lastFlags: flags });
-      if (node.isDir && node.expanded && node.children) {
-        this.flatten(node.children, flags, out);
-      }
+  /** Render on the next frame; many reads landing together render once. */
+  private scheduleRender(): void {
+    if (this.renderFrame || !this.open_) return;
+    this.renderFrame = requestAnimationFrame(() => {
+      this.renderFrame = 0;
+      this.render();
     });
   }
 
   private render(): void {
-    this.headerEl.replaceChildren(
-      span("ft-root", compactPath(toShellPath(this.rootPath), 30)),
-    );
+    if (this.renderFrame) {
+      cancelAnimationFrame(this.renderFrame);
+      this.renderFrame = 0;
+    }
+    const view = this.view;
+    const root = view?.root ?? "";
+    const rootState = this.dirs.get(root);
 
-    this.rows = [];
-    this.flatten(this.roots, [], this.rows);
-    if (this.selected >= this.rows.length) {
-      this.selected = Math.max(0, this.rows.length - 1);
+    const title = root ? compactPath(toShellPath(root), 30) : "…";
+    if (this.rootEl.textContent !== title) {
+      this.rootEl.textContent = title;
+      this.rootEl.title = root;
     }
 
-    const frag = document.createDocumentFragment();
-    for (const [i, row] of this.rows.entries()) {
-      frag.appendChild(this.rowElement(row, i));
-    }
-    if (this.error) frag.appendChild(span("ft-note ft-error", this.error));
-    else if (this.rows.length === 0) {
-      frag.appendChild(
-        span("ft-note", this.showHidden ? "empty" : "empty (. shows hidden)"),
-      );
-    }
-    if (this.truncated) frag.appendChild(span("ft-note", "… too many entries"));
+    const { rows, shown } = view
+      ? buildTree(root, this.dirs, view.open, this.showHidden)
+      : { rows: [], shown: [] };
+    this.rows = rows;
+    this.shown = shown;
+    this.index = selectionIndex(rows, view?.selected ?? null, this.index);
+    if (view) view.selected = rows[this.index]?.entry.path ?? null;
 
-    this.bodyEl.replaceChildren(frag);
-    this.paintSelection();
+    const nodes: HTMLElement[] = [];
+    const rowEls = new Map<string, { el: HTMLElement; sig: string }>();
+    for (const row of rows) {
+      const prefix = connectors(row);
+      const { entry } = row;
+      const sig = `${prefix}|${entry.isDir}${entry.isSymlink}${entry.hidden}|${row.status}`;
+      const prev = this.rowEls.get(entry.path);
+      const item = prev?.sig === sig ? prev : { el: rowElement(row, prefix), sig };
+      rowEls.set(entry.path, item);
+      nodes.push(item.el);
+    }
+    this.rowEls = rowEls;
+
+    if (!rootState || (rootState.entries === null && !rootState.error)) {
+      nodes.push(span("ft-note", "…"));
+    } else if (rootState.error) {
+      nodes.push(span("ft-note ft-error", rootState.error));
+    } else if (rows.length === 0) {
+      nodes.push(span("ft-note", this.showHidden ? "empty" : "empty (. shows hidden)"));
+    }
+    if (rootState?.truncated) nodes.push(span("ft-note", "… too many entries"));
+
+    patchChildren(this.bodyEl, nodes);
+    this.paintSelection(false);
+    if (this.open_) this.wantWatch(shown);
+    if (this.dirs.size > CACHE_LIMIT) this.trimCache();
   }
 
-  private rowElement(row: Row, index: number): HTMLElement {
-    const el = document.createElement("div");
-    el.className = "ft-row";
-
-    // `│  ` for each ancestor still having siblings below, then the connector.
-    let prefix = "";
-    for (let d = 0; d < row.depth; d++) prefix += row.lastFlags[d] ? "   " : "│  ";
-    prefix += row.lastFlags[row.depth] ? "└─ " : "├─ ";
-    el.appendChild(span("ft-tree", prefix));
-
-    const node = row.node;
-    const classes = ["ft-name"];
-    if (node.isDir) classes.push("ft-dir");
-    if (node.hidden) classes.push("ft-hidden");
-    if (node.isSymlink) classes.push("ft-link");
-    const label = node.name + (node.isDir ? "/" : "");
-    el.appendChild(span(classes.join(" "), label));
-
-    if (node.loading) el.appendChild(span("ft-note", " …"));
-    if (node.error) el.appendChild(span("ft-note ft-error", " !"));
-
-    // Mouse convenience: click selects (and toggles a directory), double-click
-    // activates a file. Everything here is reachable from the keyboard too.
-    el.addEventListener("mousedown", (ev) => {
-      ev.preventDefault(); // keep focus on the sidebar
-      this.el.focus();
-      this.select(index);
-      if (node.isDir) this.activate(node);
-    });
-    el.addEventListener("dblclick", () => {
-      if (!node.isDir) this.activate(node);
-    });
-
-    return el;
+  /** Move the highlight, touching only the two rows involved. Scrolls only for a
+   * cursor move — a background re-read must not yank a scrolled tree around. */
+  private paintSelection(scroll: boolean): void {
+    const row = this.rows[this.index];
+    const el = row ? (this.rowEls.get(row.entry.path)?.el ?? null) : null;
+    if (el !== this.selectedEl) {
+      this.selectedEl?.classList.remove("selected");
+      el?.classList.add("selected");
+      this.selectedEl = el;
+    }
+    if (scroll) el?.scrollIntoView({ block: "nearest" });
   }
 
-  private paintSelection(): void {
-    const children = this.bodyEl.children;
-    for (let i = 0; i < children.length; i++) {
-      children[i].classList.toggle("selected", i === this.selected);
+  /** The row a mouse event landed on, if any. */
+  private rowAt(target: EventTarget | null): Row | undefined {
+    const el = target instanceof Element ? target.closest<HTMLElement>(".ft-row") : null;
+    const path = el?.dataset.path;
+    return path === undefined ? undefined : this.rows.find((r) => r.entry.path === path);
+  }
+
+  /** Drop listings no view refers to (a pane closed, a root moved on). */
+  private trimCache(): void {
+    const keep = new Set<string>(this.watched);
+    for (const view of this.views.values()) {
+      keep.add(view.root);
+      for (const dir of view.open) keep.add(dir);
     }
-    const sel = children[this.selected];
-    if (sel instanceof HTMLElement) sel.scrollIntoView({ block: "nearest" });
+    for (const dir of this.dirs.keys()) if (!keep.has(dir)) this.dirs.delete(dir);
+  }
+}
+
+/** Build one row's element. Its `data-path` is how clicks find the row. */
+function rowElement(row: Row, prefix: string): HTMLElement {
+  const el = document.createElement("div");
+  el.className = "ft-row";
+  el.dataset.path = row.entry.path;
+  el.appendChild(span("ft-tree", prefix));
+
+  const { entry } = row;
+  const classes = ["ft-name"];
+  if (entry.isDir) classes.push("ft-dir");
+  if (entry.hidden) classes.push("ft-hidden");
+  if (entry.isSymlink) classes.push("ft-link");
+  el.appendChild(span(classes.join(" "), entry.name + (entry.isDir ? "/" : "")));
+
+  if (row.status === "loading") el.appendChild(span("ft-note", " …"));
+  if (row.status === "error") el.appendChild(span("ft-note ft-error", " !"));
+  return el;
+}
+
+/**
+ * Make `parent`'s children exactly `nodes`, touching only what differs: children
+ * no longer wanted are removed, then missing or misplaced ones inserted. A
+ * re-read that adds one file costs one insertion, not a rebuild of the list.
+ */
+function patchChildren(parent: HTMLElement, nodes: readonly HTMLElement[]): void {
+  const keep = new Set<Node>(nodes);
+  for (let child = parent.firstChild; child; ) {
+    const next = child.nextSibling;
+    if (!keep.has(child)) parent.removeChild(child);
+    child = next;
+  }
+  let cursor = parent.firstChild;
+  for (const node of nodes) {
+    if (node === cursor) cursor = cursor.nextSibling;
+    else parent.insertBefore(node, cursor);
   }
 }
 

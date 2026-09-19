@@ -40,3 +40,6 @@ dirs = "5"
 # API from our own `pick_file` command, so no extra capability is exposed to the
 # frontend (CLAUDE.md §15).
 tauri-plugin-dialog = "2"
+# Filesystem change notifications for the file sidebar (ReadDirectoryChangesW /
+# inotify / FSEvents). Watches only what the sidebar displays; see `watch.rs`.
+notify = "8"

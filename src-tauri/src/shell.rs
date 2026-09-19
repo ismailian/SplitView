@@ -501,6 +501,33 @@ fn zsh_zdotdir(setup: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// The character locale a shell gets when its environment names none. macOS has
+/// no `C.UTF-8`, but every install ships `en_US.UTF-8`.
+#[cfg(target_os = "macos")]
+const FALLBACK_CTYPE: &str = "en_US.UTF-8";
+#[cfg(not(target_os = "macos"))]
+const FALLBACK_CTYPE: &str = "C.UTF-8";
+
+/// Tell the shell its terminal is UTF-8 when the inherited environment doesn't
+/// say (CLAUDE.md §20). A GUI app often starts with no `LANG` at all (Windows
+/// always; macOS from the Dock), and `--rcfile` skips the login profile that
+/// would set one, so the shell runs in the byte-oriented "C" locale. xterm.js
+/// decodes UTF-8 regardless, but readline then measures the prompt in *bytes*:
+/// `└──╼` is 4 columns and 12 bytes, so its idea of the cursor is 8 columns off,
+/// and any full-line redraw (the highlight it drops after a bracketed paste,
+/// history recall) writes the line in the wrong place, duplicating text.
+///
+/// Only `LC_CTYPE` is set — encoding, not language or number formats — and only
+/// when none of `LC_ALL`/`LC_CTYPE`/`LANG` is: a locale the user chose wins.
+fn ensure_utf8_locale(cmd: &mut CommandBuilder) {
+    let named = ["LC_ALL", "LC_CTYPE", "LANG"]
+        .into_iter()
+        .any(|k| cmd.get_env(k).is_some_and(|v| !v.is_empty()));
+    if !named {
+        cmd.env("LC_CTYPE", FALLBACK_CTYPE);
+    }
+}
+
 /// Build the `CommandBuilder` for the user's shell with prompt injection wired
 /// in. The environment is inherited from the parent process by default, so
 /// PATH/aliases/completions survive.
@@ -511,6 +538,7 @@ pub fn build_command(cfg: &ShellConfig) -> Result<CommandBuilder> {
 
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    ensure_utf8_locale(&mut cmd);
 
     // Prompt-segment toggles, read by `__sv_prompt` each time it rebuilds.
     let pi = cfg.prompt_info;
@@ -737,6 +765,28 @@ mod tests {
             cmd.get_env("SV_DIR_SEGMENTS").and_then(|v| v.to_str()),
             Some("0")
         );
+    }
+
+    #[test]
+    fn declares_a_utf8_locale_only_when_none_is_set() {
+        let mut cmd = CommandBuilder::new("bash");
+        for k in ["LC_ALL", "LC_CTYPE", "LANG"] {
+            cmd.env_remove(k);
+        }
+        ensure_utf8_locale(&mut cmd);
+        assert_eq!(
+            cmd.get_env("LC_CTYPE").and_then(|v| v.to_str()),
+            Some(FALLBACK_CTYPE)
+        );
+
+        // A locale the user chose wins, even a non-UTF-8 one.
+        let mut cmd = CommandBuilder::new("bash");
+        for k in ["LC_ALL", "LC_CTYPE"] {
+            cmd.env_remove(k);
+        }
+        cmd.env("LANG", "de_DE.ISO-8859-1");
+        ensure_utf8_locale(&mut cmd);
+        assert!(cmd.get_env("LC_CTYPE").is_none());
     }
 
     #[test]

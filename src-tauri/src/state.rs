@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 use portable_pty::{ChildKiller, MasterPty};
 use tauri::ipc::Channel;
 
+use crate::watch::DirWatch;
+
 /// Mirrors the frontend's `PaneId` (an opaque string).
 pub type PaneId = String;
 
@@ -49,4 +51,8 @@ pub struct AppState {
     /// (the new window reads its pane's scrollback here rather than smuggling a
     /// large buffer through a URL query string).
     pub handoff: Mutex<HashMap<PaneId, String>>,
+    /// Each window's file-sidebar watch, keyed by window label. Present only
+    /// while that window's sidebar is open; removed when the window is destroyed
+    /// even if its page never said so (see `lib.rs`).
+    pub watchers: Mutex<HashMap<String, DirWatch>>,
 }
