@@ -69,6 +69,7 @@ the keymap.
 | Terminal rendering | **`@xterm/xterm`** + addons | `@xterm/addon-fit`, `@xterm/addon-webgl`, optionally `@xterm/addon-web-links`, `@xterm/addon-search`. Note the **scoped `@xterm/*` package names** — the old unscoped `xterm` packages are legacy. |
 | Layout / UI | **Plain TypeScript** (no heavy framework) | The terminal surface and split layout are managed imperatively for predictable performance. Avoid introducing React/Vue for the terminal grid; re-render storms are the enemy here. A tiny reactive helper for non-terminal UI is acceptable if justified. |
 | Config | **TOML** | User config at `~/.config/splitview/config.toml` (platform-appropriate dir). |
+| Remote control | **`tokio` + `tokio-tungstenite` + `tokio-rustls`/`rustls` (ring) + `rcgen` + `mdns-sd`** | Opt-in encrypted WebSocket server; see §21. `ring` is the pinned crypto provider — the default `aws-lc-rs` needs cmake and nasm, which the Tauri toolchain does not already provide. |
 
 **Primary platforms: macOS and Linux.** Windows is explicitly secondary and we
 do **not** default to PowerShell or cmd.exe (see §18). If Windows is ever
@@ -150,7 +151,12 @@ splitview/
 │   │   └── model.ts           ← tree rows + watch set as pure functions (TESTED)
 │   ├── background/
 │   │   └── BackgroundPanel.ts ← backgrounded-pane indicator + picker
+│   ├── remote/                ← remote control, webview side (see §21)
+│   │   ├── RemoteBridge.ts    ← publishes the roster, relays remote actions
+│   │   ├── roster.ts          ← pane list -> flat remote roster (TESTED)
+│   │   └── qr.ts              ← pairing QR encoder, no deps (TESTED)
 │   ├── settings/              ← in-app Settings window (model + DOM)
+│   │   └── RemoteSection.ts   ← the Remote panel: enable, pair, devices
 │   ├── keymap/
 │   │   ├── keymap.ts          ← prefix engine + binding registry
 │   │   └── actions.ts         ← action handlers (split, focus, move, zoom...)
@@ -161,7 +167,8 @@ splitview/
 │   │   └── config.ts          ← load/parse/validate TOML config
 │   └── styles/
 │       └── theme.css          ← CSS variables; divider + colors live here
-│                                (+ settings.css, sidebar.css, background.css)
+│                                (+ settings.css, sidebar.css, background.css,
+│                                 remote.css)
 └── src-tauri/                 ← backend (Rust)
     ├── Cargo.toml
     ├── tauri.conf.json
@@ -175,7 +182,21 @@ splitview/
         ├── pty.rs             ← spawn/read/write/resize/kill via portable-pty
         ├── shell.rs           ← shell detection + prompt injection (see §8)
         ├── watch.rs           ← file-sidebar filesystem watch (notify), debounced
-        └── commands.rs        ← #[tauri::command] functions
+        ├── commands.rs        ← #[tauri::command] functions
+        └── remote/            ← remote control, backend side (see §21)
+            ├── mod.rs         ← RemoteState: server, roster, devices, audit
+            ├── protocol.rs    ← wire frames + messages, pure (TESTED)
+            ├── server.rs      ← TLS + WebSocket accept loop (TESTED)
+            ├── session.rs     ← one client: subscriptions, coalescing
+            ├── auth.rs        ← device registry, token issue/verify (TESTED)
+            ├── pairing.rs     ← pairing codes, QR payload, rate limit (TESTED)
+            ├── identity.rs    ← self-signed cert + fingerprint (TESTED)
+            └── discovery.rs   ← mDNS `_splitview._tcp` advertisement
+
+docs/
+├── remote-control-desktop.md  ← the normative remote design + wire spec
+├── remote-control-mobile.md   ← the Flutter client's companion document
+└── remote/fixtures/*.json     ← golden protocol vectors, shared with the client
 ```
 
 ---
@@ -421,6 +442,28 @@ Keep all Tauri calls behind typed wrappers in `src/ipc/commands.ts`. Never call
 | `fs_watch` | `(window, on_change: Channel<Vec<String>>) -> Result<()>` | Start the calling window's sidebar watch; batches of changed directories arrive on the channel. Dropped automatically when the window is destroyed. |
 | `fs_watch_dirs` | `(window, dirs: Vec<String>) -> Result<()>` | Replace the watched set (the sidebar's root + open folders); only the delta reaches the OS. |
 | `fs_unwatch` | `(window) -> Result<()>` | Stop the window's watch (sidebar closed). |
+| `publish_panes` | `(snapshot: WindowPanes) -> Result<()>` | Publish this window's pane roster for remote clients. **Ignored while remote control is off** (§21). |
+| `provide_snapshot` | `(request_id: u64, pane_id, serialized, cols, rows) -> Result<()>` | Answer a `remote-snapshot-request` with a serialized xterm.js buffer. |
+| `remote_status` | `() -> Result<RemoteStatus>` | Server state, address, fingerprint, devices, sessions, live pairing code. |
+| `remote_enable` | `(config: RemoteConfig) -> Result<RemoteStatus>` | Generate/load the TLS identity, bind, advertise over mDNS. |
+| `remote_disable` | `() -> Result<RemoteStatus>` | Stop accepting, end every session, forget the roster. |
+| `remote_pairing_start` | `() -> Result<RemoteStatus>` | Issue a single-use pairing code (120 s). |
+| `remote_pairing_cancel` | `() -> Result<RemoteStatus>` | Drop the live pairing code. |
+| `remote_pairing_respond` | `(request_id: u64, approve: bool) -> Result<()>` | The answer to a `remote-pairing-request`. Nothing is issued until this says `true`. |
+| `remote_devices` | `() -> Result<Vec<DeviceInfo>>` | Paired devices, newest first. |
+| `remote_revoke_device` | `(device_id: String) -> Result<RemoteStatus>` | Forget a device **and** cut any session using it. |
+| `remote_disconnect_session` | `(session_id: u64) -> Result<RemoteStatus>` | End one live session without revoking its device. |
+
+### Events (backend → frontend)
+
+| Event | Payload | Purpose |
+|---|---|---|
+| `pty-exit` | `PaneId` | A pane's shell exited on its own; close the pane. |
+| `reattach-pane` | `{ paneId, owner }` | A detached window asking its owner to adopt its pane back. |
+| `remote-action` | `{ windowLabel, action, paneId?, cwd? }` | Addressed: create or close a pane on a remote client's behalf (§21). |
+| `remote-snapshot-request` | `{ windowLabel, requestId, paneId }` | Addressed: serialize a pane for a client that just attached. |
+| `remote-pairing-request` | `{ requestId, deviceName, platform, address }` | Addressed to the target window: show the approval prompt. |
+| `remote-status-changed` | `RemoteStatus` | Broadcast: the server was enabled/disabled, or a session came or went. |
 
 `SpawnOpts` includes optional `cwd`, optional `shell` override, and the prompt
 template (or the backend reads it from loaded config).
@@ -541,6 +584,14 @@ runtime whose label matches none of them gets no core permissions, and the
 failure is silent-ish: the window opens but `emit`/`listen`/`close` are denied.
 If you introduce a new window label, add its pattern there in the same change.
 
+The remote-control commands (§21) are app-local like the rest, so they need no
+extra grant — but the **events** they depend on do travel over `core:event`,
+which `core:default` provides *per listed label*. A window whose label matches
+nothing in `default.json` never hears `remote-action`,
+`remote-snapshot-request` or `remote-pairing-request`, and remote control will
+quietly skip it. Remote control adds no plugin permissions and no filesystem
+grant: `read_dir` and `pick_file` are **never** exposed to a remote client.
+
 **Closing a window needs `core:window:allow-destroy`, not just `allow-close`.**
 As soon as a window registers an `onCloseRequested` listener — every SplitView
 window does, to kill its shells first — Tauri prevents the native close and
@@ -601,7 +652,9 @@ npm run test        # vitest (layout tree, keymap)
   Windows prompt.
 - **Not a persistent multiplexer server.** Unlike tmux, v1 does not detach /
   reattach sessions that survive the app closing. Panes live with the window.
-  (Could be revisited later; out of scope now.)
+  Remote *viewing and control* is in scope (§21) and session *persistence* is
+  not: a phone can watch and drive the panes that exist, but closing the window
+  still kills them and there is nothing to reattach to afterwards.
 - **No heavy theming engine, no plugin system, no AI features in the terminal**
   in v1. Keep the surface small.
 - **No mouse-only features.** Anything you can do with the mouse must also have a
@@ -669,6 +722,93 @@ npm run test        # vitest (layout tree, keymap)
   open folder.
 - **Recreating terminals on layout change** loses scrollback and flickers.
   Re-parent the existing xterm.js DOM node instead.
+- **Remote input bypasses the webview entirely.** A remote keystroke goes
+  straight to the PTY via the same write path `write_pty` uses; it is never
+  echoed locally. The desktop terminal and the phone converge because the PTY
+  echoes on the *read* side, which both are subscribed to. If you ever add local
+  echo on either side you get every character twice.
+- **The roster must never be published when remote control is off.** A list of
+  every terminal you have open, with titles, working directories and a preview
+  of each one's output, is exactly the thing that should not exist unless
+  someone asked for the feature. `publish_panes` refuses while the server is
+  off, `RemoteBridge` skips the call, and `disable` drops what was there.
+- **A pane's `seq` counts chunks, not bytes**, and is only ever compared against
+  itself. Do not present it as a byte count or persist it across a restart.
+- **`Notify::notify_waiters()` only wakes a waiter that has already polled.** A
+  session killed between registration and its first `select!` would never hear
+  it, so revocation uses `notify_one()`, which leaves a permit behind.
+
+---
+
+## 21. Remote control
+
+An **opt-in** encrypted WebSocket server that lets a paired phone see the live
+panes, attach to one, type into it, and create or close panes. The full design
+and the normative wire protocol are in
+[`docs/remote-control-desktop.md`](docs/remote-control-desktop.md); the Flutter
+client's view of the same protocol is in `docs/remote-control-mobile.md`, and
+`docs/remote/fixtures/` holds the golden vectors both sides assert against.
+**The desktop document wins if the two ever disagree.**
+
+Three rules keep the architecture the same as it was without the feature:
+
+1. **Input goes straight to the PTY.** Remote keystrokes call the same write
+   path `write_pty` does; they never pass through a webview.
+2. **Output fans out in the backend.** `state::OutputSink` is `{ local, remote,
+   seq }`: the owning window's `Channel` (swapped by `attach_pty`, semantics
+   unchanged) plus a `tokio::sync::broadcast` for remote subscribers. `send` is
+   synchronous and non-blocking on both paths, so the reader thread in `pty.rs`
+   keeps its shape and can never be stalled by the network — a receiver that
+   falls behind is *lagged*, told to resync, and loses history. With nothing
+   subscribed the remote path costs one atomic load per chunk.
+3. **Anything that touches layout goes through the frontend.** `create_pane` and
+   `close_pane` are relayed as addressed `remote-action` events into the window
+   that owns the pane, which uses the existing layout operations. Rust still
+   does not know what a split is.
+
+What lives where:
+
+- **Only the webview knows** titles, working directories, preview lines, pane
+  order and scrollback. It publishes the first four as a flat roster
+  (`publish_panes`, debounced ~150 ms, plus a 2 s refresh while a session is
+  live) and answers `remote-snapshot-request` with a `SerializeAddon` dump.
+- **Only the backend knows** the socket, the TLS identity, the device registry,
+  the pairing codes and the per-pane output counters.
+
+The phone is a **tab list, not a layout**: one flat roster, one subscription at
+a time, no split/move/zoom/detach/background/sidebar. `src/layout/tree.ts` must
+not change for a remote feature — if it wants to, that is the design smell.
+
+### Security posture
+
+Enabling this turns a terminal emulator into a remote shell server, and the code
+is arranged to make that hard to do by accident:
+
+- **Off by default**, and not restored at launch unless the user explicitly asks
+  (Settings → Remote → "Turn on at startup").
+- **TLS with a pinned self-signed certificate.** No CA. The client learns the
+  SHA-256 out of band from the pairing QR and refuses anything else.
+- **Pairing is two factors and a person**: a single-use 8-character Crockford
+  base32 code (120 s, 5 attempts, then burned), *and* an explicit desktop
+  approval prompt that is not skippable. With no window to ask, the answer is no.
+- **Tokens** are 256 bits of CSPRNG output, stored only as a SHA-256, compared
+  in constant time, and revocable — revoking also cuts the live session.
+- **Bounded**: 4 concurrent sessions, 30-minute idle timeout, 10 connection
+  attempts per IP per minute, one served path (`/remote`).
+- **Remote resize is off** by default: one PTY has one size, and reflowing the
+  laptop's window because someone picked up a phone is behaviour people
+  uninstall software over.
+- **The filesystem commands (`read_dir`, `pick_file`) are never exposed.**
+- Every pair, approval, rejection, connect, disconnect and revoke appends to
+  `remote/audit.log` next to the identity, and an indicator is visible whenever
+  the server is on, with a distinct state while a session is live.
+
+### Reachability
+
+LAN plus mDNS out of the box; **Tailscale or any other overlay is the
+recommended path** for reaching a laptop you are not next to (scan the QR or
+type the tailnet address — mDNS will not cross a subnet). A relay is explicitly
+out of scope. One limit no code fixes: a sleeping laptop is a dead server.
 
 ---
 

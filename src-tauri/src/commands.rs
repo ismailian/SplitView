@@ -13,6 +13,9 @@ use tauri::{AppHandle, State};
 
 use crate::error::{Error, Result};
 use crate::pty;
+use crate::remote::{
+    DeviceInfo, RemoteConfig, RemoteState, RemoteStatus, SnapshotReply, WindowPanes,
+};
 use crate::shell::{normalize_cwd, Alias, PromptInfo, PromptStyle, ShellConfig};
 use crate::state::{AppState, PaneId};
 use crate::watch::DirWatch;
@@ -193,7 +196,7 @@ pub fn attach_pty(
     let handle = panes
         .get(&pane_id)
         .ok_or_else(|| Error::PaneNotFound(pane_id.clone()))?;
-    *handle.output.lock().map_err(|_| Error::Poisoned)? = on_output;
+    handle.output.set_local(on_output)?;
     Ok(())
 }
 
@@ -408,6 +411,134 @@ pub async fn pick_file(app: AppHandle) -> Result<Option<String>> {
         .set_title("Insert file path")
         .blocking_pick_file();
     Ok(picked.map(|p| p.to_string()))
+}
+
+// --- remote control (docs/remote-control-desktop.md) ------------------------
+//
+// The webview publishes what only it knows (the pane roster, a pane's screen)
+// and relays what only it may do (anything that touches the layout tree). The
+// backend owns the socket, the crypto and the device registry. See
+// `remote::mod` for why the boundary sits exactly there.
+
+/// Publish this window's pane roster so remote clients can see it.
+///
+/// Called from `RemoteBridge` on every layout change (debounced) and on a timer
+/// while a session is live. Ignored entirely while remote control is off — a
+/// list of every terminal you have open is not something to keep around when
+/// nobody asked for the feature (CLAUDE.md §20).
+#[tauri::command]
+pub fn publish_panes(
+    state: State<'_, AppState>,
+    remote: State<'_, RemoteState>,
+    snapshot: WindowPanes,
+) -> Result<()> {
+    if !remote.is_enabled() {
+        return Ok(());
+    }
+    let seqs = state.output_seqs()?;
+    remote.publish_window(snapshot, &seqs)
+}
+
+/// Answer a `remote-snapshot-request`: the serialized xterm.js buffer a newly
+/// attached client needs before the live stream makes sense.
+#[tauri::command]
+pub fn provide_snapshot(
+    remote: State<'_, RemoteState>,
+    request_id: u64,
+    pane_id: PaneId,
+    serialized: String,
+    cols: u16,
+    rows: u16,
+) -> Result<()> {
+    // The request id already identifies the reply; the pane id travels with it
+    // so the frontend and the log can be read without cross-referencing.
+    let _ = pane_id;
+    remote.provide_snapshot(
+        request_id,
+        SnapshotReply {
+            serialized,
+            cols,
+            rows,
+        },
+    )
+}
+
+/// Everything the Settings "Remote" section renders.
+#[tauri::command]
+pub fn remote_status(remote: State<'_, RemoteState>) -> Result<RemoteStatus> {
+    Ok(remote.status())
+}
+
+/// Turn remote control on: generate or load the TLS identity, bind, and (on a
+/// LAN bind) start advertising over mDNS.
+#[tauri::command]
+pub fn remote_enable(
+    app: AppHandle,
+    remote: State<'_, RemoteState>,
+    config: RemoteConfig,
+) -> Result<RemoteStatus> {
+    remote.enable(&app, config)
+}
+
+/// Turn it off: stop accepting, end every live session, forget the roster.
+#[tauri::command]
+pub fn remote_disable(app: AppHandle, remote: State<'_, RemoteState>) -> Result<RemoteStatus> {
+    remote.disable(&app)
+}
+
+/// Issue a single-use pairing code (the user pressed "Pair a device").
+#[tauri::command]
+pub fn remote_pairing_start(
+    app: AppHandle,
+    remote: State<'_, RemoteState>,
+) -> Result<RemoteStatus> {
+    remote.start_pairing(&app)
+}
+
+/// Drop the live pairing code (the user closed the dialog).
+#[tauri::command]
+pub fn remote_pairing_cancel(
+    app: AppHandle,
+    remote: State<'_, RemoteState>,
+) -> Result<RemoteStatus> {
+    remote.cancel_pairing(&app)
+}
+
+/// The answer to a `remote-pairing-request` prompt. Nothing is issued until
+/// this says `true` (`docs/remote-control-desktop.md` §7.2).
+#[tauri::command]
+pub fn remote_pairing_respond(
+    remote: State<'_, RemoteState>,
+    request_id: u64,
+    approve: bool,
+) -> Result<()> {
+    remote.respond_to_pairing(request_id, approve)
+}
+
+/// Paired devices, newest first.
+#[tauri::command]
+pub fn remote_devices(remote: State<'_, RemoteState>) -> Result<Vec<DeviceInfo>> {
+    Ok(remote.status().devices)
+}
+
+/// Forget a device **and** cut any session using it.
+#[tauri::command]
+pub fn remote_revoke_device(
+    app: AppHandle,
+    remote: State<'_, RemoteState>,
+    device_id: String,
+) -> Result<RemoteStatus> {
+    remote.revoke_device(&app, &device_id)
+}
+
+/// End one live session without revoking its device.
+#[tauri::command]
+pub fn remote_disconnect_session(
+    app: AppHandle,
+    remote: State<'_, RemoteState>,
+    session_id: u64,
+) -> Result<RemoteStatus> {
+    remote.disconnect_session(&app, session_id)
 }
 
 #[cfg(test)]

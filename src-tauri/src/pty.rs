@@ -5,7 +5,7 @@
 //! parsing, and rendering all live in xterm.js on the frontend.
 
 use std::io::Read;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 
 use portable_pty::{native_pty_system, PtySize};
@@ -81,31 +81,28 @@ pub fn spawn(
         .take_writer()
         .map_err(|e| Error::Pty(e.to_string()))?;
 
-    // The output sink is swappable so a pane can move between windows: the
-    // reader always sends to whatever `Channel` is currently installed, and
-    // `attach_pty` re-points it (CLAUDE.md §4). Shared between this thread and
-    // the `PtyHandle`; locked only for the brief send.
-    let output: OutputSink = Arc::new(Mutex::new(on_output));
+    // The output sink fans each chunk out to the owning window's `Channel` and
+    // to any remote subscribers. The window's channel is swappable so a pane can
+    // move between windows: the reader always sends to whatever `Channel` is
+    // currently installed, and `attach_pty` re-points it (CLAUDE.md §4). Shared
+    // between this thread and the `PtyHandle`; locked only for the brief send.
+    let output = Arc::new(OutputSink::new(on_output));
     let reader_output = Arc::clone(&output);
 
     // One dedicated reader thread per PTY. It blocks on the read (never under
-    // the state lock, never on the async command path) and forwards chunks. It
-    // is purely a pipe: it exits on read EOF/error and is *not* what detects
-    // shell exit (see the waiter thread below for why). A *send* failure is not
-    // fatal — during a detach the window that owned the channel may have closed
-    // for the instant before `attach_pty` installs the new one — so we swallow
-    // send errors and keep reading; only read-EOF (master dropped by
-    // `close_pty`) stops the thread.
+    // the state lock, never on the async command path) and hands each chunk to
+    // the sink, which fans it out. It is purely a pipe: it exits on read
+    // EOF/error and is *not* what detects shell exit (see the waiter thread
+    // below for why). `OutputSink::send` never fails and never blocks — a window
+    // that closed for the instant before `attach_pty` installs its replacement,
+    // or a remote client on a bad connection, must not be able to stall this
+    // loop — so only read-EOF (master dropped by `close_pty`) stops the thread.
     thread::spawn(move || {
         let mut buf = [0u8; READ_BUF];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break, // EOF: master dropped
-                Ok(n) => {
-                    if let Ok(sink) = reader_output.lock() {
-                        let _ = sink.send(buf[..n].to_vec());
-                    }
-                }
+                Ok(n) => reader_output.send(&buf[..n]),
                 Err(_) => break,
             }
         }

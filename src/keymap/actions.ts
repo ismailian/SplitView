@@ -17,6 +17,15 @@ export interface AppActions {
   move(dir: Direction): void;
   toggleZoom(): void;
   closePane(): void;
+  /**
+   * Close a pane by id with **no** confirmation dialog. The keymap never calls
+   * this — `closePane` is its entry point, and it confirms first — but a remote
+   * client must not be able to leave a modal on an unattended laptop, and it
+   * does its own confirmation (`docs/remote-control-desktop.md` §5.4). No new
+   * binding is added, so the remote still cannot reach anything the keyboard
+   * cannot.
+   */
+  closePaneConfirmed(paneId: string): void;
   /** Pop the focused pane out into its own window (main window only). */
   detach(): void;
   /** Send a detached pane back into the main window (detached window only). */

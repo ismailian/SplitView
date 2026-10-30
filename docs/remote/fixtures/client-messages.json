@@ -1,0 +1,94 @@
+{
+  "_comment": "Golden wire-protocol fixtures for SplitView remote control. docs/remote-control-desktop.md §6 is the normative spec; these vectors are asserted by the Rust tests in src-tauri/src/remote/protocol.rs and are copied verbatim into the Flutter client's codec tests so the two implementations cannot drift.",
+  "proto": 1,
+  "messages": [
+    {
+      "name": "hello",
+      "json": {
+        "type": "hello",
+        "proto": 1,
+        "deviceId": "dev-3f9a",
+        "token": "6f0c…",
+        "client": "splitview-remote/0.1.0 (ios)"
+      }
+    },
+    {
+      "name": "hello-without-client",
+      "json": {
+        "type": "hello",
+        "proto": 1,
+        "deviceId": "dev-3f9a",
+        "token": "6f0c…",
+        "client": null
+      }
+    },
+    {
+      "name": "pair",
+      "json": {
+        "type": "pair",
+        "proto": 1,
+        "code": "K7M2QX4Z",
+        "deviceName": "Pixel 8",
+        "platform": "android"
+      }
+    },
+    {
+      "name": "subscribe",
+      "json": {
+        "type": "subscribe",
+        "paneId": "pane-7"
+      }
+    },
+    {
+      "name": "unsubscribe",
+      "json": {
+        "type": "unsubscribe",
+        "paneId": "pane-7"
+      }
+    },
+    {
+      "name": "requestSnapshot",
+      "json": {
+        "type": "requestSnapshot",
+        "paneId": "pane-7"
+      }
+    },
+    {
+      "name": "createPane",
+      "json": {
+        "type": "createPane",
+        "cwd": "/home/me/project-x"
+      }
+    },
+    {
+      "name": "createPane-without-cwd",
+      "json": {
+        "type": "createPane",
+        "cwd": null
+      }
+    },
+    {
+      "name": "closePane",
+      "json": {
+        "type": "closePane",
+        "paneId": "pane-7"
+      }
+    },
+    {
+      "name": "resize",
+      "json": {
+        "type": "resize",
+        "paneId": "pane-7",
+        "cols": 80,
+        "rows": 24
+      }
+    },
+    {
+      "name": "ping",
+      "json": {
+        "type": "ping",
+        "t": 1726000000000
+      }
+    }
+  ]
+}

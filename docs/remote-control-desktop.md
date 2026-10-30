@@ -1,9 +1,19 @@
 # Remote Control — Desktop Implementation Plan
 
-> Status: **proposal**. Nothing here is implemented yet.
+> Status: **implemented** (M1–M5; the optional relay, M6, is not).
 > Companion document: [`remote-control-mobile.md`](./remote-control-mobile.md).
 > This document is the **normative** source for the wire protocol; the mobile
 > document describes the client's view of it and must not diverge.
+>
+> Where the implementation deviates from the original proposal, this document
+> has been amended to describe **what the code does** — see §5.3 (the snapshot
+> guarantee), §6.2 (subscription limits) and §14 (the open questions, now
+> answered). Golden protocol vectors live in `docs/remote/fixtures/`.
+>
+> **Not verified in a running GUI.** Everything below is covered by unit and
+> integration tests (including a real loopback TLS handshake with certificate
+> pinning), but no phone has ever connected to this server — there is no client
+> yet. Treat the end-to-end flow as untested.
 
 ---
 
@@ -246,8 +256,19 @@ Flow:
 3. `RemoteBridge` calls `pane.serialize()` and replies via a new command
    `provide_snapshot(requestId, paneId, serialized, cols, rows)`.
 4. Backend sends `snapshot` to the client, **then** starts forwarding live
-   chunks. Chunks arriving during steps 2–3 are buffered in the session so
-   nothing is lost or duplicated.
+   chunks. The session subscribes to the pane's output *before* asking for the
+   snapshot, so the stream is never interrupted; chunks that arrive while the
+   request is in flight are buffered but **discarded** when the snapshot lands,
+   because the snapshot is a picture of the screen those chunks had already been
+   drawn into — replaying them would duplicate output.
+
+   The honest guarantee is therefore *"no duplication, and at most the few
+   milliseconds between the window serializing and its reply reaching us"*, not
+   the "nothing lost or duplicated" the proposal claimed. Closing that last gap
+   needs the webview to report how much of the stream it had applied, which
+   means putting a sequence number on every chunk of the local hot path — too
+   much cost on the thing CLAUDE.md §4 calls a dumb, fast pipe, for a sliver a
+   `requestSnapshot` already recovers.
 5. If no reply arrives within 3 s (window busy or gone), send `snapshot` with an
    empty buffer and let the live stream fill the screen.
 
@@ -332,7 +353,7 @@ support is rejected with `proto_mismatch` before anything else happens.
 |---|---|---|
 | `hello` | `proto`, `deviceId`, `token`, `client` | reconnect with a stored token |
 | `pair` | `proto`, `code`, `deviceName`, `platform` | first-time pairing |
-| `subscribe` | `paneId` | server replies `snapshot`, then streams |
+| `subscribe` | `paneId` | server replies `snapshot`, then streams. Subscribing to a pane already subscribed re-requests its snapshot; a session may hold at most 8 subscriptions and is answered `not_permitted` past that (the client is expected to hold one — §10.3) |
 | `unsubscribe` | `paneId` | |
 | `requestSnapshot` | `paneId` | after a `resync`, or on app resume |
 | `createPane` | `cwd?` | relayed to the target window |
@@ -575,27 +596,29 @@ window** (highest `focusedAt`). If all windows close, the roster empties and
 
 Each milestone is independently reviewable and leaves the tree shippable.
 
-**M1 — Fan-out.** `OutputSink` becomes `{local, remote, seq}`. No network, no
+All of M1–M5 have landed. Each is marked below with what carries it.
+
+**M1 — Fan-out.** ✅ `state::OutputSink`. `OutputSink` becomes `{local, remote, seq}`. No network, no
 UI, nothing user-visible. Test: a second subscriber receives byte-identical
 output to the webview channel, and a deliberately lagging subscriber does not
 stall the reader thread. *This de-risks everything after it and should land
 first.*
 
-**M2 — Frontend bridge.** `publish_panes`, `provide_snapshot`, `remote-action`,
+**M2 — Frontend bridge.** ✅ `src/remote/RemoteBridge.ts`, `roster.ts`. `publish_panes`, `provide_snapshot`, `remote-action`,
 `remote-snapshot-request`, `RemoteBridge.ts`, `closePaneConfirmed`. Still no
 network; driven from a test harness that emits the events directly.
 
-**M3 — Plaintext WebSocket on loopback.** `protocol.rs`, `server.rs`,
+**M3 — Protocol and sessions.** ✅ `protocol.rs`, `server.rs`, `session.rs` — built directly on TLS rather than going through a plaintext step, since the transport was the cheap part and the pinning is the part worth exercising early. `protocol.rs`, `server.rs`,
 `session.rs`. Full subscribe → snapshot → stream → input → create/close loop,
 with coalescing and resync. Dev-only flag, `127.0.0.1` only, **no auth**. This
 is where the protocol turns out to be wrong; find that out cheaply.
 
-**M4 — TLS, pairing, security.** `identity.rs`, `auth.rs`, `pairing.rs`, the
+**M4 — TLS, pairing, security.** ✅ `identity.rs`, `auth.rs`, `pairing.rs`, `RemoteSection.ts`. `identity.rs`, `auth.rs`, `pairing.rs`, the
 Settings section, desktop approval prompt, rate limiting, revocation, audit log,
 capability grants. **Gate: a security review before anything binds to a LAN
 interface.**
 
-**M5 — Discovery and polish.** mDNS, reconnect/resync hardening, idle timeouts,
+**M5 — Discovery and polish.** ✅ `discovery.rs`, the resize toggle, idle timeouts. mDNS, reconnect/resync hardening, idle timeouts,
 the optional remote-resize toggle, documentation.
 
 **M6 (optional) — Relay** for off-LAN, if Tailscale proves insufficient.
@@ -632,7 +655,7 @@ Following CLAUDE.md §17's bias toward pure, high-value units:
 
 ## 13. Changes required to CLAUDE.md
 
-These should land with the feature, not after it:
+Done — these landed with the feature:
 
 - **§18 (non-goals)** currently says SplitView is "not a persistent multiplexer
   server". Remote control is adjacent enough that the next contributor will
@@ -649,18 +672,32 @@ These should land with the feature, not after it:
 
 ---
 
-## 14. Open questions
+## 14. Open questions — and what was decided
 
-1. **Persist "enabled" across launches?** Convenient, and a meaningful increase
-   in exposure. Proposal: off by default, with an explicit "keep enabled at
-   startup" setting that shows a warning.
-2. **Should the phone be able to focus a pane on the desktop?** A `selectPane`
-   message is trivial to add and occasionally handy ("put that on the big
-   screen"). Deferred until someone wants it.
-3. **`cwd` inheritance for `createPane`.** Inherit from the desktop's focused
-   pane (consistent with a keyboard split) or from the pane the phone was last
-   viewing (consistent with what the phone user sees)? Proposal: the latter,
-   since it matches the remote user's mental model; needs a `cwd` field on the
-   request, which the protocol already has.
-4. **Whether to support more than one concurrent phone.** The design allows it;
-   whether the UX should is a separate question.
+1. **Persist "enabled" across launches?** **Answered: opt-in.** Off by default;
+   Settings → Remote has a "Turn on at startup" switch, and only the `main`
+   window acts on it (enabling rebinds the socket, so a second window doing the
+   same would restart a running server and drop whoever was connected). A stored
+   value that is not exactly `true` is read as off, so a corrupt settings blob
+   cannot open a socket.
+2. **Should the phone be able to focus a pane on the desktop?** **Still
+   deferred.** No `selectPane` message exists; adding one is a protocol
+   addition, not a breaking change.
+3. **`cwd` inheritance for `createPane`.** **Answered: the phone's view wins,
+   with the desktop as the fallback.** The client may send `cwd` (the pane it
+   was looking at) and that is used as-is; when it sends none, the backend fills
+   in the target window's focused pane's directory, which is exactly what a
+   keyboard split would have inherited. Both paths end up in the same
+   `App.splitInto`.
+4. **Whether to support more than one concurrent phone.** **Answered: yes, up to
+   4.** The cost is bounded — each session subscribes to one pane and coalesces
+   its own buffer — and Settings lists every live session with a Disconnect
+   button, so the UX question has an answer the user can act on.
+
+### Still open
+
+- **No client exists yet**, so none of this has been exercised end to end. The
+  first real bug reports will come from the Flutter app, not from here.
+- **Pairing depends on correct pinning**, as §7.2 notes. A PAKE (SPAKE2) would
+  remove that dependency at the cost of materially more crypto in Dart; it
+  remains a possible hardening rather than a v1 requirement.

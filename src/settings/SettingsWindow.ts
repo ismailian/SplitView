@@ -15,6 +15,7 @@ import type { Settings, ColorKey } from "./settings";
 import { PRESETS, MAX_DIR_SEGMENTS, clampDirSegments } from "./settings";
 import type { PromptInfo, PromptToggle } from "../ipc/commands";
 import { promptDir } from "../paths";
+import { RemoteSection } from "./RemoteSection";
 
 export interface KeymapView {
   prefix: string;
@@ -33,7 +34,13 @@ export interface SettingsWindowDeps {
   actionInfo: Record<string, { label: string; category: string }>;
 }
 
-type Section = "keybindings" | "aliases" | "display" | "info" | "banner";
+export type Section =
+  | "keybindings"
+  | "aliases"
+  | "display"
+  | "info"
+  | "banner"
+  | "remote";
 
 const SECTION_META: { id: Section; label: string }[] = [
   { id: "keybindings", label: "⌨   Keybindings" },
@@ -41,6 +48,7 @@ const SECTION_META: { id: Section; label: string }[] = [
   { id: "display", label: "🎨  Display" },
   { id: "info", label: "ⓘ   Terminal Info" },
   { id: "banner", label: "▤   Banner" },
+  { id: "remote", label: "⇄   Remote" },
 ];
 
 const CATEGORY_ORDER = ["Panes", "Focus", "Move / Resize", "Font", "App", "Other"];
@@ -65,6 +73,8 @@ export class SettingsWindow {
   private active: Section = "keybindings";
   private readonly panels = new Map<Section, HTMLElement>();
   private readonly navButtons = new Map<Section, HTMLButtonElement>();
+  /** Built lazily and kept, so it can poll only while it is on screen. */
+  private remoteSection: RemoteSection | null = null;
 
   constructor(private readonly deps: SettingsWindowDeps) {
     this.current = deps.getSettings();
@@ -74,9 +84,15 @@ export class SettingsWindow {
     return this.root !== null;
   }
 
-  open(): void {
-    if (this.root) return;
+  /** Open Settings, optionally jumping straight to a section (the remote
+   * indicator uses this to land on "Remote"). */
+  open(section?: Section): void {
+    if (this.root) {
+      if (section) this.show(section);
+      return;
+    }
     this.current = clone(this.deps.getSettings());
+    if (section) this.active = section;
     this.root = this.build();
     document.body.appendChild(this.root);
     this.show(this.active);
@@ -85,6 +101,9 @@ export class SettingsWindow {
 
   close(): void {
     if (!this.root) return;
+    // Stop the Remote section polling the backend once it is off screen.
+    this.remoteSection?.hide();
+    this.remoteSection = null;
     this.root.remove();
     this.root = null;
     this.panels.clear();
@@ -108,6 +127,9 @@ export class SettingsWindow {
       panel.classList.toggle("active", id === section);
     for (const [id, btn] of this.navButtons)
       btn.classList.toggle("active", id === section);
+    // Only the visible section polls; everything else is static DOM.
+    if (section === "remote") this.remoteSection?.show();
+    else this.remoteSection?.hide();
   }
 
   private build(): HTMLElement {
@@ -171,7 +193,19 @@ export class SettingsWindow {
         return this.buildInfo();
       case "banner":
         return this.buildBanner();
+      case "remote":
+        return this.buildRemote();
     }
+  }
+
+  /** The Remote section owns its own rendering and talks to the backend. */
+  private buildRemote(): HTMLElement {
+    const section = new RemoteSection({
+      settings: () => this.current.remote,
+      onChange: () => this.emit(),
+    });
+    this.remoteSection = section;
+    return section.el;
   }
 
   // --- Keybindings (read-only) -------------------------------------------

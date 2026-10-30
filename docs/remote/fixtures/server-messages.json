@@ -1,0 +1,129 @@
+{
+  "_comment": "Golden wire-protocol fixtures for SplitView remote control. docs/remote-control-desktop.md §6 is the normative spec; these vectors are asserted by the Rust tests in src-tauri/src/remote/protocol.rs and are copied verbatim into the Flutter client's codec tests so the two implementations cannot drift.",
+  "proto": 1,
+  "messages": [
+    {
+      "name": "welcome",
+      "json": {
+        "type": "welcome",
+        "proto": 1,
+        "serverVersion": "0.1.0",
+        "hostName": "ismail-laptop",
+        "features": []
+      }
+    },
+    {
+      "name": "welcome-with-resize",
+      "json": {
+        "type": "welcome",
+        "proto": 1,
+        "serverVersion": "0.1.0",
+        "hostName": "ismail-laptop",
+        "features": [
+          "resize"
+        ]
+      }
+    },
+    {
+      "name": "paired",
+      "json": {
+        "type": "paired",
+        "deviceId": "dev-3f9a",
+        "token": "8f2b…"
+      }
+    },
+    {
+      "name": "panes",
+      "json": {
+        "type": "panes",
+        "panes": [
+          {
+            "id": "pane-7",
+            "title": "npm run dev",
+            "cwd": "/home/me/project-x",
+            "cols": 120,
+            "rows": 34,
+            "preview": "  ➜  Local:   http://localhost:5173/",
+            "backgrounded": false,
+            "window": "main",
+            "seq": 148213
+          },
+          {
+            "id": "pane-9",
+            "title": null,
+            "cwd": null,
+            "cols": 80,
+            "rows": 24,
+            "preview": "",
+            "backgrounded": true,
+            "window": "sv-win-2",
+            "seq": 12
+          }
+        ]
+      }
+    },
+    {
+      "name": "panes-empty",
+      "json": {
+        "type": "panes",
+        "panes": []
+      }
+    },
+    {
+      "name": "snapshot",
+      "json": {
+        "type": "snapshot",
+        "paneId": "pane-7",
+        "serialized": "\u001b[32mhello\u001b[0m\r\n",
+        "cols": 120,
+        "rows": 34
+      }
+    },
+    {
+      "name": "paneClosed-exit",
+      "json": {
+        "type": "paneClosed",
+        "paneId": "pane-7",
+        "reason": "exit"
+      }
+    },
+    {
+      "name": "paneClosed-window",
+      "json": {
+        "type": "paneClosed",
+        "paneId": "pane-7",
+        "reason": "window_closed"
+      }
+    },
+    {
+      "name": "resync",
+      "json": {
+        "type": "resync",
+        "paneId": "pane-7"
+      }
+    },
+    {
+      "name": "error-unauthorized",
+      "json": {
+        "type": "error",
+        "code": "unauthorized",
+        "message": "unknown device"
+      }
+    },
+    {
+      "name": "error-unknown-pane",
+      "json": {
+        "type": "error",
+        "code": "unknown_pane",
+        "message": "pane-7 is gone"
+      }
+    },
+    {
+      "name": "pong",
+      "json": {
+        "type": "pong",
+        "t": 1726000000000
+      }
+    }
+  ]
+}

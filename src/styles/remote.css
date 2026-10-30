@@ -1,0 +1,207 @@
+/*
+ * Remote control: the corner indicator, the pairing prompt, and the Settings
+ * section (CLAUDE.md §14, §21).
+ *
+ * The indicator is the second piece of permanent chrome SplitView adds, so it
+ * follows the first one exactly (`.bg-indicator`): tiny, dim, and present only
+ * when it has something to say. It has to be present, though — a terminal that
+ * someone else can read must never look like one that nobody can.
+ *
+ * Everything else here lives inside the Settings overlay and reuses its palette
+ * variables, so the section looks like the rest of the window rather than a
+ * bolted-on panel.
+ */
+
+.remote-indicator {
+  position: fixed;
+  right: 8px;
+  bottom: 28px; /* above the backgrounded-panes indicator */
+  z-index: 20;
+  padding: 2px 7px;
+  border: 1px solid var(--divider);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--ansi-8);
+  font-family: var(--font-family);
+  font-size: 10px;
+  line-height: 1.5;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+
+.remote-indicator:hover {
+  opacity: 1;
+  color: var(--ansi-2);
+  border-color: var(--divider-active);
+}
+
+/* A session is live: the one state worth noticing without looking for it. */
+.remote-indicator.live {
+  color: var(--ansi-3);
+  border-color: var(--ansi-3);
+  opacity: 1;
+}
+
+/* --- the approval prompt ------------------------------------------------ */
+
+.remote-prompt {
+  width: min(460px, 92vw);
+  padding: 18px 20px 16px;
+  background: var(--sv-bg);
+  color: var(--sv-text);
+  border: 1px solid var(--sv-line);
+  border-radius: 10px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+  font-family: var(--font-family);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.remote-prompt-title {
+  font-size: 14px;
+  margin-bottom: 10px;
+  color: var(--sv-accent);
+}
+
+.remote-prompt-body {
+  margin-bottom: 8px;
+}
+
+.remote-prompt-body strong {
+  color: var(--sv-text);
+}
+
+.remote-prompt-warn {
+  margin-bottom: 14px;
+  color: var(--sv-dim);
+  font-size: 12px;
+}
+
+.remote-prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* The affirmative answer is the one that needs a moment's thought, so it is
+ * the one that is marked — not the one the eye falls on first. */
+.remote-allow {
+  border-color: var(--sv-accent);
+  color: var(--sv-accent);
+}
+
+/* --- the Settings section ----------------------------------------------- */
+
+.sv-remote-block {
+  margin: 18px 0 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--sv-line);
+}
+
+.sv-remote-error {
+  color: var(--ansi-1);
+}
+
+.sv-remote-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  white-space: nowrap;
+}
+
+.sv-remote-name {
+  flex: 0 0 auto;
+  min-width: 8em;
+  color: var(--sv-accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sv-remote-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--sv-dim);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sv-danger:hover {
+  color: var(--ansi-1);
+  border-color: var(--ansi-1);
+}
+
+.sv-mono {
+  font-family: var(--font-family);
+  font-size: 11px;
+  color: var(--sv-text);
+  /* A 95-character fingerprint has to wrap rather than widen the window. */
+  word-break: break-all;
+  max-width: 22em;
+  text-align: right;
+}
+
+/* --- pairing ------------------------------------------------------------ */
+
+.sv-pair {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 6px 0 2px;
+  flex-wrap: wrap;
+}
+
+.sv-qr {
+  flex: 0 0 auto;
+  width: 168px;
+  height: 168px;
+  background: #ffffff;
+  border-radius: 4px;
+  padding: 0;
+  line-height: 0;
+}
+
+.sv-qr svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.sv-qr-failed {
+  display: flex;
+  align-items: center;
+  padding: 10px;
+  background: transparent;
+  color: var(--ansi-1);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sv-pair-side {
+  flex: 1 1 14em;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.sv-pair-code {
+  font-family: var(--font-family);
+  font-size: 22px;
+  letter-spacing: 0.18em;
+  color: var(--sv-accent);
+}
+
+.sv-pair-countdown {
+  color: var(--sv-dim);
+  font-size: 12px;
+}
+
+.sv-pair-manual {
+  color: var(--sv-dim);
+  font-size: 11px;
+  word-break: break-all;
+}

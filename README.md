@@ -14,6 +14,10 @@ domain vocabulary. This README is just the quick start.
 - A tmux-style **prefix** model (default `Ctrl+A`) so terminal keys are never stolen
 - Real PTYs via `portable-pty`, full ANSI, WebGL-accelerated rendering
 - Thin 1px dividers, no decorative chrome
+- **Remote control** (opt-in, off by default): pair a phone over an encrypted,
+  certificate-pinned connection and watch, type into, or open and close panes
+  from it. Settings → Remote. See
+  [`docs/remote-control-desktop.md`](./docs/remote-control-desktop.md).
 
 ## Layout
 
@@ -24,10 +28,12 @@ src/                  frontend (TypeScript)
   terminal/           xterm.js wrapper + renderer
   ipc/commands.ts     typed wrappers over Tauri invoke()/Channel
   config/config.ts    TOML config load/parse/validate
+  remote/             remote-control bridge, roster, pairing QR encoder
 src-tauri/src/        backend (Rust)
   pty.rs shell.rs     PTY spawn/read + per-shell prompt injection
   commands.rs         the IPC surface
   state.rs error.rs   app state + serializable errors
+  remote/             TLS WebSocket server, protocol, pairing, mDNS
 ```
 
 ## Develop

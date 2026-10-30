@@ -8,7 +8,7 @@
  * the CSS variables in `styles/theme.css` — the single source of colour truth.
  */
 
-import type { Alias, PromptInfo } from "../ipc/commands";
+import type { Alias, BindMode, PromptInfo, RemoteConfig } from "../ipc/commands";
 import { defaultConfig } from "../config/config";
 
 /** Everything under the "Display" section. Colours are `#rrggbb` hex. */
@@ -31,12 +31,45 @@ export interface DisplaySettings {
   dividerSize: number;
 }
 
+/**
+ * Remote control, as Settings remembers it (`docs/remote-control-desktop.md`
+ * §7.3). The server itself is never on unless the backend says so — this is the
+ * configuration it is started *with*, plus whether to start it at all.
+ */
+export interface RemoteSettings {
+  /**
+   * Re-enable the server on launch. Off by default and deliberately opt-in:
+   * turning a terminal emulator into a remote shell server should be something
+   * you did, not something you inherited from last week.
+   */
+  enableAtStartup: boolean;
+  /** `lan` (reachable from the network) or `loopback` (tunnel it yourself). */
+  bind: BindMode;
+  /** `0` asks the OS for an ephemeral port. */
+  port: number;
+  /** Let a client resize a pane, which reflows this window too. Off by default. */
+  allowResize: boolean;
+}
+
 export interface Settings {
   display: DisplaySettings;
   promptInfo: PromptInfo;
   aliases: Alias[];
   banner: string;
+  remote: RemoteSettings;
 }
+
+/** The subset of `RemoteSettings` the backend needs to start the server. */
+export function remoteConfigOf(settings: RemoteSettings): RemoteConfig {
+  return {
+    bind: settings.bind,
+    port: settings.port,
+    allowResize: settings.allowResize,
+  };
+}
+
+/** Default listening port; mirrors `DEFAULT_PORT` in `src-tauri/src/remote`. */
+export const DEFAULT_REMOTE_PORT = 8765;
 
 const STORAGE_KEY = "splitview.settings";
 
@@ -67,7 +100,22 @@ export function defaultSettings(): Settings {
     },
     aliases: [],
     banner: "",
+    remote: {
+      enableAtStartup: false,
+      bind: "lan",
+      port: DEFAULT_REMOTE_PORT,
+      allowResize: false,
+    },
   };
+}
+
+/** Clamp a stored/edited port to a usable range; `0` means "any free port". */
+export function clampPort(value: unknown): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 0 || n > 65535) return DEFAULT_REMOTE_PORT;
+  // Ports below 1024 need privileges we do not have and do not want.
+  if (n > 0 && n < 1024) return DEFAULT_REMOTE_PORT;
+  return n;
 }
 
 /** The colour-valued keys of `DisplaySettings` (everything a preset sets). */
@@ -173,10 +221,27 @@ export function loadSettings(): Settings {
       },
       aliases: parsed.aliases ? sanitizeAliases(parsed.aliases) : def.aliases,
       banner: typeof parsed.banner === "string" ? parsed.banner : def.banner,
+      remote: sanitizeRemote(def.remote, parsed.remote),
     };
   } catch {
     return def;
   }
+}
+
+/** Fill in and clamp stored remote settings, defaulting anything unusable. */
+function sanitizeRemote(
+  def: RemoteSettings,
+  stored: Partial<RemoteSettings> | undefined,
+): RemoteSettings {
+  const merged = { ...def, ...(stored ?? {}) };
+  return {
+    // A stored value that is not exactly `true` leaves the server off: the
+    // safe reading of a corrupt settings blob is "do not open a socket".
+    enableAtStartup: merged.enableAtStartup === true,
+    bind: merged.bind === "loopback" ? "loopback" : "lan",
+    port: clampPort(merged.port),
+    allowResize: merged.allowResize === true,
+  };
 }
 
 /** Persist settings. Failures (e.g. storage disabled) are non-fatal. */

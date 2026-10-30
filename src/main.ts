@@ -12,6 +12,7 @@ import "./styles/theme.css";
 import "./styles/settings.css";
 import "./styles/sidebar.css";
 import "./styles/background.css";
+import "./styles/remote.css";
 
 import {
   type Layout,
@@ -27,6 +28,7 @@ import {
   closePane,
   setRatio,
   resizeFocused,
+  leaves,
 } from "./layout/tree";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -64,9 +66,13 @@ import {
   loadSettings,
   saveSettings,
   applyDisplay,
+  remoteConfigOf,
   type Settings,
 } from "./settings/settings";
 import { SettingsWindow } from "./settings/SettingsWindow";
+import { RemoteBridge } from "./remote/RemoteBridge";
+import { buildRoster } from "./remote/roster";
+import { remoteEnable, type RemotePaneInfo } from "./ipc/commands";
 
 /** Font-size bounds for the zoom-in/out actions, in px. */
 const FONT_MIN = 6;
@@ -88,6 +94,9 @@ class App implements AppActions {
   private readonly settingsWindow: SettingsWindow;
   private readonly fileTree: FileTree;
   private readonly backgroundPanel: BackgroundPanel;
+  /** Publishes this window's panes to remote clients and relays their actions;
+   * inert while remote control is off (CLAUDE.md §21). */
+  private readonly remote: RemoteBridge;
   /** Panes running outside the layout, oldest first (insertion order). */
   private readonly backgrounded = new Map<string, BackgroundedPane>();
   private nextSeq = 0;
@@ -135,8 +144,24 @@ class App implements AppActions {
       kill: (id) => this.killBackgrounded(id),
       onClose: () => this.focusedPane()?.focus(),
     });
-    // Sidebar to the left of the pane area; the indicator floats over both.
-    root.append(this.fileTree.el, this.container, this.backgroundPanel.indicator);
+    this.remote = new RemoteBridge({
+      windowLabel: this.windowLabel,
+      panes: () => this.remotePanes(),
+      focusedPaneId: () => this.layout.focused,
+      snapshot: (id) => this.remoteSnapshot(id),
+      createPane: (cwd) => this.splitInto("right", cwd),
+      closePane: (id) => this.closePaneConfirmed(id),
+      onIndicatorClick: () => this.settingsWindow.open("remote"),
+      onPromptClosed: () => this.focusedPane()?.focus(),
+    });
+
+    // Sidebar to the left of the pane area; the indicators float over both.
+    root.append(
+      this.fileTree.el,
+      this.container,
+      this.backgroundPanel.indicator,
+      this.remote.indicator,
+    );
 
     this.settingsWindow = new SettingsWindow({
       getSettings: () => this.settings,
@@ -199,10 +224,33 @@ class App implements AppActions {
       })
       .catch(() => {});
 
+    // Remote control: pick up the current status and start listening. A
+    // failure here must not stop the window from being a terminal.
+    void this.remote
+      .start()
+      .then(() => this.autoEnableRemote())
+      .catch(() => {});
+
     const first = await this.newPane(this.initialCwd);
     this.layout = singleLayout(first.id ?? this.placeholderId());
     this.render();
     first.focus();
+  }
+
+  /**
+   * Start the remote server at launch, if the user asked for that.
+   *
+   * Only the main window does it: enabling rebinds the socket, so a second
+   * window doing the same would restart a server that is already running and
+   * drop whoever was connected.
+   */
+  private autoEnableRemote(): void {
+    if (this.windowLabel !== "main") return;
+    if (!this.settings.remote.enableAtStartup || this.remote.isEnabled) return;
+    void remoteEnable(remoteConfigOf(this.settings.remote)).catch(() => {
+      // The port is taken or the identity could not be written; Settings shows
+      // the real reason when the user goes looking.
+    });
   }
 
   private placeholderId(): string {
@@ -268,6 +316,16 @@ class App implements AppActions {
   // --- key handling ------------------------------------------------------
 
   private onKeyDown = (ev: KeyboardEvent): void => {
+    // The pairing prompt outranks everything: a keystroke meant for it must
+    // never reach a terminal a stranger is asking to watch.
+    if (this.remote.isPromptOpen) {
+      if (this.remote.handleKey(ev)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      return;
+    }
+
     // While Settings is open, the keymap must not fire — keys belong to the
     // window's inputs. Escape closes it and returns focus to the terminal.
     if (this.settingsWindow.isOpen) {
@@ -335,6 +393,8 @@ class App implements AppActions {
       panes: this.panes,
       onRatioChange: (path, ratio) => this.onRatioChange(path, ratio),
     });
+    // Debounced, and a no-op while remote control is off.
+    this.remote.publish();
   }
 
   private refitAll(): void {
@@ -358,11 +418,22 @@ class App implements AppActions {
   split(dir: "down" | "right"): void {
     // Inherit the focused pane's working directory so the new shell opens where
     // the user is (reported by the shell via OSC 7; see Pane).
-    const cwd = this.focusedPane()?.cwd ?? undefined;
-    void this.newPane(cwd).then((pane) => {
+    this.splitInto(dir, this.focusedPane()?.cwd ?? undefined);
+  }
+
+  /**
+   * Split, opening the new shell in `cwd` (falling back to the focused pane's
+   * directory). The remote's `create_pane` lands here with the directory the
+   * phone was looking at, which is the split it would have made itself.
+   */
+  private splitInto(dir: "down" | "right", cwd?: string): void {
+    const where = cwd ?? this.focusedPane()?.cwd ?? undefined;
+    void this.newPane(where).then((pane) => {
       const id = pane.id;
       if (!id) return;
-      this.commit(splitFocused(this.layout, dir, id));
+      this.commit(
+        this.layout.root ? splitFocused(this.layout, dir, id) : singleLayout(id),
+      );
     });
   }
 
@@ -390,7 +461,22 @@ class App implements AppActions {
     const target = this.layout.focused;
     if (!target) return;
     if (!window.confirm("Close this pane?")) return;
-    this.removePane(target);
+    this.closePaneConfirmed(target);
+  }
+
+  /**
+   * Close a pane with no confirmation. The keymap always goes through
+   * `closePane`, which asks first; this is the entry point for a caller that
+   * has already confirmed — today, a remote client, which cannot be allowed to
+   * pop a modal on a laptop nobody is sitting at.
+   */
+  closePaneConfirmed(paneId: string): void {
+    if (!this.panes.has(paneId) && !this.backgrounded.has(paneId)) return;
+    if (this.backgrounded.has(paneId)) {
+      this.killBackgrounded(paneId);
+      return;
+    }
+    this.removePane(paneId);
   }
 
   /**
@@ -517,6 +603,32 @@ class App implements AppActions {
     );
   }
 
+  // --- remote control ----------------------------------------------------
+
+  /**
+   * This window's panes for the remote roster: layout order first (what the
+   * phone tabs through), then backgrounded ones, which are still live
+   * terminals and still worth reaching from a phone.
+   */
+  private remotePanes(): RemotePaneInfo[] {
+    const backgrounded = new Map<string, Pane>();
+    for (const [id, entry] of this.backgrounded) backgrounded.set(id, entry.pane);
+    return buildRoster(leaves(this.layout.root), this.panes, backgrounded);
+  }
+
+  /** A pane's current screen, for a client that has just attached. */
+  private remoteSnapshot(
+    paneId: string,
+  ): { serialized: string; cols: number; rows: number } | null {
+    const pane = this.panes.get(paneId) ?? this.backgrounded.get(paneId)?.pane;
+    if (!pane) return null;
+    return {
+      serialized: pane.serialize(),
+      cols: pane.term.cols,
+      rows: pane.term.rows,
+    };
+  }
+
   /** Kill a backgrounded pane's shell for good (picker `x`). */
   private killBackgrounded(id: string): void {
     const entry = this.backgrounded.get(id);
@@ -525,6 +637,7 @@ class App implements AppActions {
     this.fileTree.forget(id);
     void entry.pane.dispose();
     this.backgroundPanel.update();
+    this.remote.publish();
   }
 
   /** Kill every backgrounded shell (this window is going away). Resolves once

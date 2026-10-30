@@ -11,6 +11,7 @@
 import "@xterm/xterm/css/xterm.css";
 import "../styles/theme.css";
 import "../styles/settings.css";
+import "../styles/remote.css";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Direction } from "../layout/tree";
@@ -43,6 +44,8 @@ import {
 } from "../settings/settings";
 import { SettingsWindow } from "../settings/SettingsWindow";
 import { shellQuote } from "../shellQuote";
+import { RemoteBridge } from "../remote/RemoteBridge";
+import { paneInfo } from "../remote/roster";
 
 /** Font-size bounds for the zoom-in/out actions, in px (mirrors `main.ts`). */
 const FONT_MIN = 6;
@@ -54,6 +57,8 @@ export class DetachedApp implements AppActions {
   private settings: Settings;
   private keymap: Keymap;
   private readonly settingsWindow: SettingsWindow;
+  /** Publishes this window's one pane to remote clients (CLAUDE.md §21). */
+  private readonly remote: RemoteBridge;
   private fontSize: number;
   /** True while handing the pane back to main, so the close handler keeps the
    * PTY alive instead of killing it. */
@@ -85,6 +90,27 @@ export class DetachedApp implements AppActions {
       },
       actionInfo: ACTION_INFO,
     });
+    this.remote = new RemoteBridge({
+      windowLabel: getCurrentWindow().label,
+      panes: () => (this.pane ? [paneInfo(this.paneId, this.pane, false)] : []),
+      focusedPaneId: () => this.paneId,
+      snapshot: (id) =>
+        id === this.paneId && this.pane
+          ? {
+              serialized: this.pane.serialize(),
+              cols: this.pane.term.cols,
+              rows: this.pane.term.rows,
+            }
+          : null,
+      // A detached window is one pane with no layout to split, so it never
+      // takes a remote `create_pane`; `eligibleAsTarget: false` keeps the
+      // backend from addressing one to it while a layout window exists.
+      eligibleAsTarget: false,
+      closePane: (id) => this.closePaneConfirmed(id),
+      onIndicatorClick: () => this.settingsWindow.open("remote"),
+      onPromptClosed: () => this.pane?.focus(),
+    });
+    this.container.appendChild(this.remote.indicator);
   }
 
   /** Defaults, with the user's prefix and overrides — but `d` reattaches here. */
@@ -104,6 +130,9 @@ export class DetachedApp implements AppActions {
   async start(): Promise<void> {
     document.addEventListener("keydown", this.onKeyDown, true);
     window.addEventListener("resize", () => this.pane?.refit());
+
+    // Remote control: this window's pane is a tab on the phone like any other.
+    void this.remote.start().catch(() => {});
 
     // If this pane's shell exits on its own (`exit`), close the window.
     void onPtyExit((id) => {
@@ -129,6 +158,7 @@ export class DetachedApp implements AppActions {
     if (this.fontSize !== this.settings.display.fontSize)
       pane.setFontSize(this.fontSize);
     this.pane = pane;
+    this.remote.publish();
 
     // Fill the window (there is only ever one pane; no dividers).
     const s = pane.el.style;
@@ -146,6 +176,15 @@ export class DetachedApp implements AppActions {
   // --- key handling (mirrors the main controller) ------------------------
 
   private onKeyDown = (ev: KeyboardEvent): void => {
+    // The pairing prompt outranks everything else on screen.
+    if (this.remote.isPromptOpen) {
+      if (this.remote.handleKey(ev)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      return;
+    }
+
     if (this.settingsWindow.isOpen) {
       if (ev.key === "Escape") {
         ev.preventDefault();
@@ -229,6 +268,16 @@ export class DetachedApp implements AppActions {
    * the same PTY-killing path runs as the OS close button. */
   closePane(): void {
     if (!window.confirm("Close this terminal?")) return;
+    void getCurrentWindow().close();
+  }
+
+  /**
+   * Close this window's pane with no confirmation — the remote path, which has
+   * already asked on the phone. Ignores any other pane id: a detached window
+   * owns exactly one.
+   */
+  closePaneConfirmed(paneId: string): void {
+    if (paneId !== this.paneId) return;
     void getCurrentWindow().close();
   }
 

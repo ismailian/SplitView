@@ -43,3 +43,42 @@ tauri-plugin-dialog = "2"
 # Filesystem change notifications for the file sidebar (ReadDirectoryChangesW /
 # inotify / FSEvents). Watches only what the sidebar displays; see `watch.rs`.
 notify = "8"
+
+# --- Remote control (docs/remote-control-desktop.md) -------------------------
+# The encrypted WebSocket server a paired phone connects to. All of this is
+# inert until the user enables remote control in Settings.
+#
+# `ring` is pinned as the rustls/rcgen crypto provider: it builds with the
+# toolchain already required for Tauri, unlike the default `aws-lc-rs` (cmake +
+# nasm). Everything else is small and single-purpose.
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "sync",
+    "net",
+    "time",
+    "io-util",
+    "macros",
+] }
+tokio-tungstenite = "0.24"
+tokio-rustls = { version = "0.26", default-features = false, features = [
+    "ring",
+    "tls12",
+] }
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "ring",
+    "tls12",
+] }
+rustls-pemfile = "2"
+rcgen = "0.13"
+rand = "0.8"
+sha2 = "0.10"
+subtle = "2"
+zeroize = "1"
+base64 = "0.22"
+data-encoding = "2"
+mdns-sd = "0.21"
+bytes = "1"
+futures-util = "0.3"
+# Certificate validity dates; no formatting feature, so no extra deps.
+time = { version = "0.3", default-features = false, features = ["std"] }

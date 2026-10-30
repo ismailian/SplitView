@@ -222,3 +222,212 @@ export async function requestReattach(
 ): Promise<void> {
   await emit("reattach-pane", { paneId, owner } satisfies ReattachRequest);
 }
+
+// --- remote control (docs/remote-control-desktop.md) ------------------------
+//
+// The webview publishes what only it knows (the pane roster, a pane's screen)
+// and relays what only it may do (anything that touches the layout tree). The
+// backend owns the socket, the crypto and the device registry. See
+// `src/remote/RemoteBridge.ts`.
+
+/** Which interfaces the server binds: every one, or loopback for tunnelling. */
+export type BindMode = "lan" | "loopback";
+
+/** The server's user-facing configuration, sent when enabling it. */
+export interface RemoteConfig {
+  bind: BindMode;
+  /** `0` asks the OS for an ephemeral port. */
+  port: number;
+  /** Allow a client to resize a pane, which reflows this window too. */
+  allowResize: boolean;
+}
+
+/** A paired device. The token itself never leaves the backend. */
+export interface RemoteDevice {
+  id: string;
+  name: string;
+  platform: string;
+  /** Unix seconds. */
+  pairedAt: number;
+  lastSeen: number;
+}
+
+/** One connected client. */
+export interface RemoteSession {
+  id: number;
+  deviceId: string;
+  deviceName: string;
+  address: string;
+  connectedAt: number;
+}
+
+/** The live pairing code, its countdown, and the payload the QR encodes. */
+export interface RemotePairing {
+  code: string;
+  secondsLeft: number;
+  payload: string;
+}
+
+/** Everything the Settings "Remote" section renders. */
+export interface RemoteStatus {
+  enabled: boolean;
+  bind: BindMode;
+  allowResize: boolean;
+  port: number;
+  /** The address to type into the phone; null while the server is off. */
+  host: string | null;
+  hostName: string;
+  /** `AB:CD:…`, present once an identity exists. */
+  fingerprint: string | null;
+  sessions: RemoteSession[];
+  devices: RemoteDevice[];
+  pairing: RemotePairing | null;
+}
+
+/** One pane, as this window publishes it to the backend's roster. */
+export interface RemotePaneInfo {
+  id: PaneId;
+  /** OSC 0/2 title. */
+  title: string | null;
+  /** OSC 7 working directory. */
+  cwd: string | null;
+  cols: number;
+  rows: number;
+  /** The pane's last non-empty output line. */
+  preview: string;
+  backgrounded: boolean;
+}
+
+/** This window's snapshot of itself, for the remote roster. */
+export interface WindowPanes {
+  windowLabel: string;
+  /** Monotonic; the backend targets the window with the highest value. */
+  focusedAt: number;
+  focusedPaneId: PaneId | null;
+  panes: RemotePaneInfo[];
+}
+
+/** A layout change a remote client asked for, addressed to one window. */
+export interface RemoteActionEvent {
+  windowLabel: string;
+  action: "create_pane" | "close_pane";
+  paneId?: PaneId | null;
+  cwd?: string | null;
+}
+
+/** A request for a pane's serialized screen, addressed to one window. */
+export interface RemoteSnapshotRequestEvent {
+  windowLabel: string;
+  requestId: number;
+  paneId: PaneId;
+}
+
+/** A device asking to pair, for the desktop approval prompt. */
+export interface RemotePairingRequestEvent {
+  requestId: number;
+  deviceName: string;
+  platform: string;
+  address: string;
+}
+
+/**
+ * Publish this window's pane roster. Debounced by the caller; ignored by the
+ * backend while remote control is off, so a roster of every terminal you have
+ * open never exists unless you asked for the feature.
+ */
+export async function publishPanes(snapshot: WindowPanes): Promise<void> {
+  await invoke("publish_panes", { snapshot });
+}
+
+/** Answer a `remote-snapshot-request` with a serialized xterm.js buffer. */
+export async function provideSnapshot(
+  requestId: number,
+  paneId: PaneId,
+  serialized: string,
+  cols: number,
+  rows: number,
+): Promise<void> {
+  await invoke("provide_snapshot", { requestId, paneId, serialized, cols, rows });
+}
+
+/** Current remote-control status (server, devices, sessions, pairing code). */
+export async function remoteStatus(): Promise<RemoteStatus> {
+  return invoke<RemoteStatus>("remote_status");
+}
+
+/** Turn remote control on. Generates the TLS identity on first use. */
+export async function remoteEnable(config: RemoteConfig): Promise<RemoteStatus> {
+  return invoke<RemoteStatus>("remote_enable", { config });
+}
+
+/** Turn it off: stop accepting, end every session, forget the roster. */
+export async function remoteDisable(): Promise<RemoteStatus> {
+  return invoke<RemoteStatus>("remote_disable");
+}
+
+/** Issue a single-use pairing code (120 s). */
+export async function remotePairingStart(): Promise<RemoteStatus> {
+  return invoke<RemoteStatus>("remote_pairing_start");
+}
+
+/** Drop the live pairing code. */
+export async function remotePairingCancel(): Promise<RemoteStatus> {
+  return invoke<RemoteStatus>("remote_pairing_cancel");
+}
+
+/** Answer a pairing prompt. Nothing is issued until this says `true`. */
+export async function remotePairingRespond(
+  requestId: number,
+  approve: boolean,
+): Promise<void> {
+  await invoke("remote_pairing_respond", { requestId, approve });
+}
+
+/** Paired devices, newest first. */
+export async function remoteDevices(): Promise<RemoteDevice[]> {
+  return invoke<RemoteDevice[]>("remote_devices");
+}
+
+/** Forget a device and cut any session using it. */
+export async function remoteRevokeDevice(deviceId: string): Promise<RemoteStatus> {
+  return invoke<RemoteStatus>("remote_revoke_device", { deviceId });
+}
+
+/** End one live session without revoking its device. */
+export async function remoteDisconnectSession(
+  sessionId: number,
+): Promise<RemoteStatus> {
+  return invoke<RemoteStatus>("remote_disconnect_session", { sessionId });
+}
+
+/** Listen for layout changes a remote client asked for. */
+export async function onRemoteAction(
+  handler: (action: RemoteActionEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<RemoteActionEvent>("remote-action", (e) => handler(e.payload));
+}
+
+/** Listen for requests to serialize a pane for a newly attached client. */
+export async function onRemoteSnapshotRequest(
+  handler: (request: RemoteSnapshotRequestEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<RemoteSnapshotRequestEvent>("remote-snapshot-request", (e) =>
+    handler(e.payload),
+  );
+}
+
+/** Listen for devices asking to pair. */
+export async function onRemotePairingRequest(
+  handler: (request: RemotePairingRequestEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<RemotePairingRequestEvent>("remote-pairing-request", (e) =>
+    handler(e.payload),
+  );
+}
+
+/** Listen for the server being enabled/disabled or a session coming or going. */
+export async function onRemoteStatusChanged(
+  handler: (status: RemoteStatus) => void,
+): Promise<UnlistenFn> {
+  return listen<RemoteStatus>("remote-status-changed", (e) => handler(e.payload));
+}

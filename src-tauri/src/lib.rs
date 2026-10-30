@@ -6,10 +6,12 @@
 mod commands;
 mod error;
 mod pty;
+mod remote;
 mod shell;
 mod state;
 mod watch;
 
+use remote::RemoteState;
 use state::AppState;
 use tauri::Manager;
 
@@ -18,8 +20,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
-        // A window's sidebar watch goes with the window, even if its page never
-        // got to unsubscribe (killed, crashed, closed mid-load).
+        .manage(RemoteState::new())
+        // A window's sidebar watch — and its entry in the remote roster — go
+        // with the window, even if its page never got to say so (killed,
+        // crashed, closed mid-load).
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(state) = window.try_state::<AppState>() {
@@ -29,6 +33,14 @@ pub fn run() {
                         .ok()
                         .and_then(|mut w| w.remove(window.label()));
                     drop(watch); // after the lock is released
+
+                    if let Some(remote) = window.try_state::<RemoteState>() {
+                        // A remote client must not be shown panes belonging to
+                        // a window that no longer exists.
+                        if let Ok(seqs) = state.output_seqs() {
+                            remote.forget_window(window.label(), &seqs);
+                        }
+                    }
                 }
             }
         })
@@ -46,6 +58,17 @@ pub fn run() {
             commands::fs_watch,
             commands::fs_watch_dirs,
             commands::fs_unwatch,
+            commands::publish_panes,
+            commands::provide_snapshot,
+            commands::remote_status,
+            commands::remote_enable,
+            commands::remote_disable,
+            commands::remote_pairing_start,
+            commands::remote_pairing_cancel,
+            commands::remote_pairing_respond,
+            commands::remote_devices,
+            commands::remote_revoke_device,
+            commands::remote_disconnect_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
