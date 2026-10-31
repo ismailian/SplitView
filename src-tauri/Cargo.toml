@@ -1,6 +1,6 @@
 [package]
 name = "splitview"
-version = "0.1.0"
+version = "0.2.0"
 description = "A minimalistic, keyboard-driven terminal emulator"
 authors = ["SplitView"]
 edition = "2021"
