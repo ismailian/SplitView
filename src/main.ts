@@ -11,6 +11,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./styles/theme.css";
 import "./styles/settings.css";
 import "./styles/sidebar.css";
+import "./styles/editor.css";
 import "./styles/background.css";
 import "./styles/remote.css";
 
@@ -44,8 +45,9 @@ import { renderLayout } from "./layout/render";
 import { Pane } from "./terminal/Pane";
 import { DetachedApp } from "./terminal/DetachedApp";
 import { shellQuote } from "./shellQuote";
-import { baseName } from "./paths";
+import { baseName, resolvePath } from "./paths";
 import { FileTree } from "./sidebar/FileTree";
+import { EditorPanel } from "./editor/EditorPanel";
 import {
   BackgroundPanel,
   type BackgroundEntry,
@@ -93,6 +95,7 @@ class App implements AppActions {
   private keymap: Keymap;
   private readonly settingsWindow: SettingsWindow;
   private readonly fileTree: FileTree;
+  private readonly editor: EditorPanel;
   private readonly backgroundPanel: BackgroundPanel;
   /** Publishes this window's panes to remote clients and relays their actions;
    * inert while remote control is off (CLAUDE.md §21). */
@@ -134,10 +137,16 @@ class App implements AppActions {
       // command; `cd` is sent with one, because there is nothing to edit.
       onInsertPath: (path) => this.insertIntoTerminal(shellQuote(path)),
       onChangeDir: (path) => this.insertIntoTerminal(`cd ${shellQuote(path)}\r`),
+      onOpenFile: (path) => void this.editor.openFile(path),
       onLeave: () => this.focusedPane()?.focus(),
       // Resizing the sidebar resizes the pane area with it.
       onResize: () => this.refitAll(),
     });
+    this.editor = new EditorPanel({
+      onLeave: () => this.focusedPane()?.focus(),
+      onResize: () => this.refitAll(),
+    });
+    this.editor.setFontSize(this.fontSize);
     this.backgroundPanel = new BackgroundPanel({
       list: () => this.backgroundEntries(),
       restore: (id) => this.restoreBackgrounded(id),
@@ -155,10 +164,12 @@ class App implements AppActions {
       onPromptClosed: () => this.focusedPane()?.focus(),
     });
 
-    // Sidebar to the left of the pane area; the indicators float over both.
+    // Sidebar left of the pane area, editor right of it; the indicators float
+    // over all of them.
     root.append(
       this.fileTree.el,
       this.container,
+      this.editor.el,
       this.backgroundPanel.indicator,
       this.remote.indicator,
     );
@@ -215,6 +226,7 @@ class App implements AppActions {
       .onCloseRequested(async (event) => {
         if (this.closing) return;
         event.preventDefault();
+        if (!this.confirmUnsaved()) return;
         this.closing = true;
         this.closeDetachedWindows();
         await this.killAllBackgrounded();
@@ -235,6 +247,21 @@ class App implements AppActions {
     this.layout = singleLayout(first.id ?? this.placeholderId());
     this.render();
     first.focus();
+  }
+
+  /**
+   * True if the window may close: nothing is unsaved, or the user says to drop
+   * it. Refusing when the close came from the last shell exiting would leave a
+   * window with no terminal in it, so that case gets a fresh one.
+   */
+  private confirmUnsaved(): boolean {
+    const count = this.editor.unsavedCount;
+    if (count === 0) return true;
+    const files = count === 1 ? "1 file has" : `${count} files have`;
+    if (window.confirm(`${files} unsaved changes. Close anyway?`)) return true;
+    if (!this.layout.root) this.splitInto("right");
+    this.editor.open();
+    return false;
   }
 
   /**
@@ -375,7 +402,9 @@ class App implements AppActions {
     ev.stopPropagation();
 
     if ("sendPrefix" in outcome) {
-      this.focusedPane()?.sendBytes(this.keymap.prefixBytes());
+      // A keystroke typed in the editor was never meant for a shell.
+      if (this.editor.isFocused) this.editor.selectAll();
+      else this.focusedPane()?.sendBytes(this.keymap.prefixBytes());
       return;
     }
     if (outcome.action) dispatchAction(outcome.action, this);
@@ -545,6 +574,26 @@ class App implements AppActions {
       this.focusedPane()?.focus();
     }
     this.refitAll();
+  }
+
+  /**
+   * Cycle the editor panel the way `<prefix> e` cycles the sidebar: closed → open
+   * and focused → focused-from-the-terminal → closed. With no file open yet there
+   * is nothing to edit, so the sidebar takes focus to pick one. Hiding the panel
+   * loses nothing: its tabs, unsaved changes included, are there on reopening.
+   */
+  toggleEditor(): void {
+    if (!this.editor.isOpen) {
+      this.editor.open();
+      if (this.editor.hasFiles) return;
+      if (this.fileTree.isOpen) this.fileTree.focus();
+      else this.toggleSidebar();
+    } else if (!this.editor.isFocused) {
+      this.editor.focus();
+    } else {
+      this.editor.close();
+      this.focusedPane()?.focus();
+    }
   }
 
   /**
@@ -776,8 +825,16 @@ class App implements AppActions {
     if (word === "settings" || word === "config") this.settingsWindow.open();
     else if (word === "reload") this.reloadConfig();
     else if (word === "files" || word === "tree") this.toggleSidebar();
+    else if (word === "edit") this.onEditCommand(cmd.trim().slice(word.length).trim());
     else if (word === "window" || word === "new") this.newWindow();
     else if (word === "bg" || word === "background") this.showBackground();
+  }
+
+  /** `splitview edit [file]`: open a file, relative to the shell it was typed in,
+   * or just toggle the panel. */
+  private onEditCommand(path: string): void {
+    if (!path) this.toggleEditor();
+    else void this.editor.openFile(resolvePath(this.focusedPane()?.cwd ?? null, path));
   }
 
   /**
@@ -790,6 +847,7 @@ class App implements AppActions {
     saveSettings(next);
     applyDisplay(next.display);
     this.fontSize = next.display.fontSize;
+    this.editor.setFontSize(this.fontSize);
     for (const pane of this.panes.values())
       pane.applyDisplay(next.display.fontFamily, next.display.fontSize);
   }
@@ -838,6 +896,7 @@ class App implements AppActions {
     const next = Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(px)));
     if (next === this.fontSize) return;
     this.fontSize = next;
+    this.editor.setFontSize(next);
     for (const pane of this.panes.values()) pane.setFontSize(next);
   }
 }

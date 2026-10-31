@@ -67,6 +67,7 @@ the keymap.
 | Frontend language | **TypeScript** | Strict mode on. |
 | Frontend tooling | **Vite** | Tauri's default dev server / bundler. |
 | Terminal rendering | **`@xterm/xterm`** + addons | `@xterm/addon-fit`, `@xterm/addon-webgl`, optionally `@xterm/addon-web-links`, `@xterm/addon-search`. Note the **scoped `@xterm/*` package names** — the old unscoped `xterm` packages are legacy. |
+| Editor panel | **CodeMirror 6** (`codemirror`, `@codemirror/*`) | One `EditorView`, one `EditorState` per tab. Grammars come from `@codemirror/language-data` as lazy chunks. |
 | Layout / UI | **Plain TypeScript** (no heavy framework) | The terminal surface and split layout are managed imperatively for predictable performance. Avoid introducing React/Vue for the terminal grid; re-render storms are the enemy here. A tiny reactive helper for non-terminal UI is acceptable if justified. |
 | Config | **TOML** | User config at `~/.config/splitview/config.toml` (platform-appropriate dir). |
 | Remote control | **`tokio` + `tokio-tungstenite` + `tokio-rustls`/`rustls` (ring) + `rcgen` + `mdns-sd`** | Opt-in encrypted WebSocket server; see §21. `ring` is the pinned crypto provider — the default `aws-lc-rs` needs cmake and nasm, which the Tauri toolchain does not already provide. |
@@ -145,10 +146,15 @@ splitview/
 │   ├── layout/
 │   │   ├── tree.ts            ← layout tree types + pure operations (TESTED)
 │   │   ├── render.ts          ← maps tree -> DOM, draws dividers
-│   │   └── divider.ts         ← draggable 1px separators
+│   │   ├── divider.ts         ← draggable 1px separators
+│   │   └── edgeDrag.ts        ← drag handle shared by the side panels
 │   ├── sidebar/
 │   │   ├── FileTree.ts        ← terminal-styled filesystem sidebar (live, per-pane views)
 │   │   └── model.ts           ← tree rows + watch set as pure functions (TESTED)
+│   ├── editor/
+│   │   ├── EditorPanel.ts     ← the code editor docked on the right (tabs, disk)
+│   │   ├── model.ts           ← EOL/BOM round trip, indent detection (TESTED)
+│   │   └── theme.ts           ← CodeMirror theme, from the CSS variables
 │   ├── background/
 │   │   └── BackgroundPanel.ts ← backgrounded-pane indicator + picker
 │   ├── remote/                ← remote control, webview side (see §21)
@@ -167,8 +173,8 @@ splitview/
 │   │   └── config.ts          ← load/parse/validate TOML config
 │   └── styles/
 │       └── theme.css          ← CSS variables; divider + colors live here
-│                                (+ settings.css, sidebar.css, background.css,
-│                                 remote.css)
+│                                (+ settings.css, sidebar.css, editor.css,
+│                                 background.css, remote.css)
 └── src-tauri/                 ← backend (Rust)
     ├── Cargo.toml
     ├── tauri.conf.json
@@ -182,6 +188,7 @@ splitview/
         ├── pty.rs             ← spawn/read/write/resize/kill via portable-pty
         ├── shell.rs           ← shell detection + prompt injection (see §8)
         ├── watch.rs           ← file-sidebar filesystem watch (notify), debounced
+        ├── files.rs           ← text file read/stat/save for the editor (TESTED)
         ├── commands.rs        ← #[tauri::command] functions
         └── remote/            ← remote control, backend side (see §21)
             ├── mod.rs         ← RemoteState: server, roster, devices, audit
@@ -378,6 +385,7 @@ split HORIZONTALLY (horizontal divider, `split_down`)
 | List / restore backgrounded panes | `Shift+b` | `show_background` |
 | Open a new window | `n` | `new_window` |
 | Toggle the file sidebar | `e` | `toggle_sidebar` |
+| Toggle the editor panel | `Shift+e` | `toggle_editor` |
 | Open Settings | `,` | `open_settings` |
 | Reload config | `r` | `reload_config` |
 | Send literal prefix to shell | press prefix again | — |
@@ -412,6 +420,34 @@ the shell's form (`C:\Users\x` → `/c/Users/x` for msys) before being typed; se
 `src/paths.ts`. Resizing it resizes the pane area, so the terminals are refit
 (and their PTYs with them).
 
+### The editor panel
+
+A code editor docked right of the pane area, outside the layout tree (like the
+sidebar, it is not a pane and has no PTY), for changing a file without leaving
+the terminal. CodeMirror does the editing; `EditorPanel` owns the tabs, the disk
+and the panel. Open a file with `e` on it in the sidebar (or double-click), or
+`splitview edit <file>` from a shell, relative to that shell's directory. With no
+file open, `<prefix> E` sends you to the sidebar to pick one. It exists only in
+layout windows, not detached ones.
+
+Its own chords: `Ctrl+S` save, `Ctrl+W` close tab, `Ctrl+PageUp/PageDown` switch
+tab, `Ctrl+Alt+Left/Right` resize (the edge can also be dragged, and the width
+persists), `Ctrl+F` find and replace, Escape to return to the terminal. They are
+CodeMirror bindings on its editing surface, so the document-level keymap still
+sees every key first and the prefix works as it does anywhere. The cost is that
+`Ctrl+A` is the prefix here too: pressing it twice selects all, because the
+literal prefix goes to whatever has focus, never to a shell behind the editor.
+
+Hiding the panel loses nothing; tabs and unsaved changes stay. Closing a dirty tab
+or a window with dirty tabs asks first. A file changes under an open buffer all
+the time, because the terminal is right there, so the visible file is stat'ed
+every 2 s while the panel is open: a clean buffer follows the disk (as a minimal
+change, outside the undo history, leaving the cursor alone), and a dirty one shows
+a warning. Saving is conditional on the `FileStamp` the buffer was read at, so
+overwriting someone else's change takes an explicit yes. It polls because the
+sidebar's watch deliberately ignores content writes. Only UTF-8 text under 8 MB
+opens; anything else is refused rather than risk saving it back corrupted.
+
 ### Implementation notes
 
 - The keymap engine listens at the document level. **It must not swallow keys
@@ -442,6 +478,9 @@ Keep all Tauri calls behind typed wrappers in `src/ipc/commands.ts`. Never call
 | `fs_watch` | `(window, on_change: Channel<Vec<String>>) -> Result<()>` | Start the calling window's sidebar watch; batches of changed directories arrive on the channel. Dropped automatically when the window is destroyed. |
 | `fs_watch_dirs` | `(window, dirs: Vec<String>) -> Result<()>` | Replace the watched set (the sidebar's root + open folders); only the delta reaches the OS. |
 | `fs_unwatch` | `(window) -> Result<()>` | Stop the window's watch (sidebar closed). |
+| `read_text_file` | `(path: String) -> Result<TextFile>` | Open a file for the editor. Refuses binary, non-UTF-8 and oversized files. |
+| `file_stamp` | `(path: String) -> Result<Option<FileStamp>>` | A file's version, `None` if it is gone. |
+| `write_text_file` | `(path: String, content: String, expected: Option<FileStamp>) -> Result<Option<FileStamp>>` | Atomic save. `None` back means the file is no longer at `expected` and nothing was written; `expected: None` overwrites. |
 | `publish_panes` | `(snapshot: WindowPanes) -> Result<()>` | Publish this window's pane roster for remote clients. **Ignored while remote control is off** (§21). |
 | `provide_snapshot` | `(request_id: u64, pane_id, serialized, cols, rows) -> Result<()>` | Answer a `remote-snapshot-request` with a serialized xterm.js buffer. |
 | `remote_status` | `() -> Result<RemoteStatus>` | Server state, address, fingerprint, devices, sessions, live pairing code. |
@@ -590,7 +629,8 @@ which `core:default` provides *per listed label*. A window whose label matches
 nothing in `default.json` never hears `remote-action`,
 `remote-snapshot-request` or `remote-pairing-request`, and remote control will
 quietly skip it. Remote control adds no plugin permissions and no filesystem
-grant: `read_dir` and `pick_file` are **never** exposed to a remote client.
+grant: `read_dir`, `pick_file` and the editor's file commands are **never**
+exposed to a remote client.
 
 **Closing a window needs `core:window:allow-destroy`, not just `allow-close`.**
 As soon as a window registers an `onCloseRequested` listener — every SplitView
@@ -720,6 +760,10 @@ npm run test        # vitest (layout tree, keymap)
   terminal. `watch.rs` watches only the outermost directory (recursively) on
   Windows and filters events back down; don't "simplify" it to one watch per
   open folder.
+- **The editor buffer only holds `\n`.** CodeMirror normalizes line endings on
+  the way in, so saving `doc.toString()` as-is rewrites every line of a CRLF file
+  and makes a one-line edit a whole-file diff. `decodeText`/`encodeText` in
+  `src/editor/model.ts` carry the file's EOL and BOM across; go through them.
 - **Recreating terminals on layout change** loses scrollback and flickers.
   Re-parent the existing xterm.js DOM node instead.
 - **Remote input bypasses the webview entirely.** A remote keystroke goes
@@ -798,7 +842,8 @@ is arranged to make that hard to do by accident:
 - **Remote resize is off** by default: one PTY has one size, and reflowing the
   laptop's window because someone picked up a phone is behaviour people
   uninstall software over.
-- **The filesystem commands (`read_dir`, `pick_file`) are never exposed.**
+- **The filesystem commands (`read_dir`, `pick_file`, `read_text_file`,
+  `file_stamp`, `write_text_file`) are never exposed.**
 - Every pair, approval, rejection, connect, disconnect and revoke appends to
   `remote/audit.log` next to the identity, and an indicator is visible whenever
   the server is on, with a distinct state while a session is live.

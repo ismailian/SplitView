@@ -176,6 +176,44 @@ export async function fsUnwatch(): Promise<void> {
   await invoke("fs_unwatch");
 }
 
+/** Which version of a file this is. Compared for equality, never ordered. */
+export interface FileStamp {
+  modifiedMs: number;
+  size: number;
+}
+
+/** A file opened for the editor panel. */
+export interface TextFile {
+  /** Native path, normalized by the backend (msys spellings are accepted). */
+  path: string;
+  content: string;
+  stamp: FileStamp;
+}
+
+/** Open a text file. Rejects with a readable reason for a binary, non-UTF-8 or
+ * oversized file. */
+export async function readTextFile(path: string): Promise<TextFile> {
+  return invoke<TextFile>("read_text_file", { path });
+}
+
+/** A file's current stamp, or `null` if it no longer exists. */
+export async function fileStamp(path: string): Promise<FileStamp | null> {
+  return invoke<FileStamp | null>("file_stamp", { path });
+}
+
+/**
+ * Save a file, provided it is still at `expected`. Returns the new stamp, or
+ * `null` if the file changed on disk and nothing was written; pass `null` for
+ * `expected` to overwrite regardless.
+ */
+export async function writeTextFile(
+  path: string,
+  content: string,
+  expected: FileStamp | null,
+): Promise<FileStamp | null> {
+  return invoke<FileStamp | null>("write_text_file", { path, content, expected });
+}
+
 /**
  * Show the OS-native file picker and return the selected absolute path, or
  * `null` if the user cancelled. The dialog is driven entirely by the backend

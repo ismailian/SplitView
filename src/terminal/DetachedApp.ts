@@ -233,10 +233,11 @@ export class DetachedApp implements AppActions {
   resize(_dir: Direction): void {}
   detach(): void {}
 
-  // Backgrounding and the file sidebar belong to a layout window: this window is
-  // one pane with nowhere to hide it and no layout to shrink. Reattach it first
-  // (`prefix d`) to use those.
+  // Backgrounding, the file sidebar and the editor belong to a layout window:
+  // this window is one pane with nowhere to hide it and no layout to shrink.
+  // Reattach it first (`prefix d`) to use those.
   toggleSidebar(): void {}
+  toggleEditor(): void {}
   backgroundPane(): void {}
   showBackground(): void {}
 

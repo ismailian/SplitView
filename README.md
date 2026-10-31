@@ -14,6 +14,10 @@ domain vocabulary. This README is just the quick start.
 - A tmux-style **prefix** model (default `Ctrl+A`) so terminal keys are never stolen
 - Real PTYs via `portable-pty`, full ANSI, WebGL-accelerated rendering
 - Thin 1px dividers, no decorative chrome
+- A file sidebar (`<prefix> e`) and a built-in **code editor** docked on the right
+  (`<prefix> E`): tabs, syntax highlighting, find and replace, and saves that
+  won't overwrite a change made from the terminal. Press `e` on a file in the
+  sidebar, or run `splitview edit <file>`
 - **Remote control** (opt-in, off by default): pair a phone over an encrypted,
   certificate-pinned connection and watch, type into, or open and close panes
   from it. Settings → Remote. See
@@ -26,11 +30,13 @@ src/                  frontend (TypeScript)
   layout/tree.ts      pure, tested layout tree (the core model)
   keymap/             prefix engine + action registry
   terminal/           xterm.js wrapper + renderer
+  editor/             the code editor panel (CodeMirror)
   ipc/commands.ts     typed wrappers over Tauri invoke()/Channel
   config/config.ts    TOML config load/parse/validate
   remote/             remote-control bridge, roster, pairing QR encoder
 src-tauri/src/        backend (Rust)
   pty.rs shell.rs     PTY spawn/read + per-shell prompt injection
+  files.rs            text file read/save for the editor
   commands.rs         the IPC surface
   state.rs error.rs   app state + serializable errors
   remote/             TLS WebSocket server, protocol, pairing, mDNS

@@ -90,7 +90,8 @@ pub struct RemoteConfig {
     /// `0` asks the OS for an ephemeral port.
     pub port: u16,
     /// Whether a client may resize a pane, which reflows the desktop window too
-    /// (`docs/remote-control-desktop.md` §10.1). Off by default, on purpose.
+    /// (`docs/remote-control-desktop.md` §10.1). On by default: the phone has
+    /// its own opt-in, and nothing resizes until that is on as well.
     pub allow_resize: bool,
 }
 
@@ -99,7 +100,7 @@ impl Default for RemoteConfig {
         Self {
             bind: BindMode::Lan,
             port: DEFAULT_PORT,
-            allow_resize: false,
+            allow_resize: true,
         }
     }
 }

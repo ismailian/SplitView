@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toShellPath, baseName, compactPath, promptDir } from "./paths";
+import { toShellPath, baseName, compactPath, promptDir, resolvePath } from "./paths";
 
 describe("toShellPath", () => {
   it("converts native Windows paths to msys form", () => {
@@ -72,5 +72,23 @@ describe("compactPath", () => {
   it("keeps the last segment when even the collapsed form is too long", () => {
     const p = "/home/john/a-very-very-long-directory-name-here";
     expect(compactPath(p, 20)).toBe("…/a-very-very-long-directory-name-here");
+  });
+});
+
+describe("resolvePath", () => {
+  it("joins a relative path onto the shell's directory", () => {
+    expect(resolvePath("/c/Users/me/proj", "src/main.ts")).toBe(
+      "/c/Users/me/proj/src/main.ts",
+    );
+    expect(resolvePath("/home/me/", "a b.txt")).toBe("/home/me/a b.txt");
+  });
+
+  it("leaves absolute paths alone", () => {
+    expect(resolvePath("/home/me", "/etc/hosts")).toBe("/etc/hosts");
+    expect(resolvePath("/c/x", "C:\\Users\\me")).toBe("C:\\Users\\me");
+  });
+
+  it("has nothing to join to before the shell reports a directory", () => {
+    expect(resolvePath(null, "a.txt")).toBe("a.txt");
   });
 });

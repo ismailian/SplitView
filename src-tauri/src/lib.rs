@@ -5,6 +5,7 @@
 
 mod commands;
 mod error;
+mod files;
 mod pty;
 mod remote;
 mod shell;
@@ -58,6 +59,9 @@ pub fn run() {
             commands::fs_watch,
             commands::fs_watch_dirs,
             commands::fs_unwatch,
+            commands::read_text_file,
+            commands::file_stamp,
+            commands::write_text_file,
             commands::publish_panes,
             commands::provide_snapshot,
             commands::remote_status,

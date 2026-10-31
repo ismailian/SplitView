@@ -31,6 +31,8 @@ resizeStep = 0.03
 #   Win+O (or Ctrl+Shift+O) -> open_file_dialog : insert a picked file's path
 #   Ctrl+=  / Ctrl+-  / Ctrl+0 -> zoom the terminal font in / out / reset
 #   <prefix> z -> toggle_zoom : maximize the focused pane, then restore
+#   <prefix> E -> toggle_editor : the code editor on the right. From a terminal:
+#                 splitview edit <file>
 #   <prefix> , -> open_settings : open the Settings window. You can also open it
 #                 from any terminal by running:  splitview settings
 #

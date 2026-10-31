@@ -47,7 +47,10 @@ export interface RemoteSettings {
   bind: BindMode;
   /** `0` asks the OS for an ephemeral port. */
   port: number;
-  /** Let a client resize a pane, which reflows this window too. Off by default. */
+  /**
+   * Let a client resize a pane, which reflows this window too. On by default:
+   * nothing resizes until the phone turns on "Fit terminal to phone" as well.
+   */
   allowResize: boolean;
 }
 
@@ -104,7 +107,7 @@ export function defaultSettings(): Settings {
       enableAtStartup: false,
       bind: "lan",
       port: DEFAULT_REMOTE_PORT,
-      allowResize: false,
+      allowResize: true,
     },
   };
 }

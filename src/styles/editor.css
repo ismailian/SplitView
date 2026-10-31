@@ -1,0 +1,168 @@
+/*
+ * Editor panel (CLAUDE.md §14).
+ *
+ * The same rules as the sidebar: the terminal font, the theme's colours, text
+ * instead of widgets, and one hairline between it and the panes that brightens
+ * while it holds focus. CodeMirror's own theme is in `src/editor/theme.ts`.
+ */
+
+.editor {
+  position: relative; /* containing block for the resize handle */
+  /* May give way to the minimum pane area when the window is narrow or the
+   * sidebar is wide; the controller sets the inline width. */
+  flex: 0 1 auto;
+  min-width: 280px;
+  height: 100%;
+  display: none; /* toggled to flex by the controller */
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-family);
+  font-size: 12px;
+  border-left: var(--divider-size) solid var(--divider);
+  outline: none;
+  --editor-font-size: 14px;
+}
+
+.editor:focus-within {
+  border-left-color: var(--divider-active);
+}
+
+/* Same grab strip as the sidebar's edge, on the other side. */
+.ed-resizer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 6;
+}
+
+.ed-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--divider-size);
+  height: 100%;
+}
+
+.ed-resizer:hover::after,
+.ed-resizer.active::after {
+  background: var(--divider-active);
+}
+
+.ed-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--divider);
+}
+
+.ed-tabs:empty {
+  display: none;
+}
+
+.ed-tab {
+  flex: 0 0 auto;
+  padding: 4px 6px 4px 10px;
+  border: none;
+  background: transparent;
+  color: var(--ansi-8);
+  font: inherit;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.ed-tab:hover {
+  color: var(--fg);
+}
+
+.ed-tab.active {
+  color: var(--ansi-2);
+}
+
+.ed-tab-close {
+  margin-left: 6px;
+  padding: 0 2px;
+  visibility: hidden;
+}
+
+.ed-tab:hover .ed-tab-close {
+  visibility: visible;
+}
+
+.ed-tab-close:hover {
+  color: var(--ansi-1);
+}
+
+.ed-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.ed-empty {
+  padding: 12px;
+  color: var(--ansi-8);
+}
+
+.ed-footer {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  color: var(--ansi-8);
+  border-top: 1px solid var(--divider);
+}
+
+.ed-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ed-status.warning {
+  color: var(--ansi-3);
+}
+
+.ed-position {
+  flex: 0 0 auto;
+}
+
+/* The terminals' thin scrollbar (theme.css). */
+.editor .cm-scroller {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.editor .cm-scroller::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+.editor .cm-scroller::-webkit-scrollbar-track,
+.editor .cm-scroller::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.editor .cm-scroller::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: var(--scrollbar-pad) solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+.editor:hover .cm-scroller::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb-active);
+  background-clip: content-box;
+}
+
+.editor .cm-scroller::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}

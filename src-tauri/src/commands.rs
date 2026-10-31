@@ -12,6 +12,7 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 
 use crate::error::{Error, Result};
+use crate::files::{self, FileStamp, TextFile};
 use crate::pty;
 use crate::remote::{
     DeviceInfo, RemoteConfig, RemoteState, RemoteStatus, SnapshotReply, WindowPanes,
@@ -392,6 +393,33 @@ pub async fn fs_unwatch(window: tauri::Window, state: State<'_, AppState>) -> Re
         .remove(window.label());
     drop(watch);
     Ok(())
+}
+
+/// Open a text file for the editor panel. Refuses anything that isn't UTF-8 text
+/// (see [`files`]), with a reason the panel shows as-is.
+///
+/// `async`, like `read_dir`, so the disk stays off the main thread.
+#[tauri::command]
+pub async fn read_text_file(path: String) -> Result<TextFile> {
+    files::read_text(&path)
+}
+
+/// A file's current stamp, or `None` if it is gone. The editor polls this for
+/// its visible file, to notice changes made from the terminal.
+#[tauri::command]
+pub async fn file_stamp(path: String) -> Result<Option<FileStamp>> {
+    files::stamp(&path)
+}
+
+/// Save a file, unless it is no longer at `expected`: then nothing is written and
+/// the result is `None`, for the editor to ask. `None` for `expected` overwrites.
+#[tauri::command]
+pub async fn write_text_file(
+    path: String,
+    content: String,
+    expected: Option<FileStamp>,
+) -> Result<Option<FileStamp>> {
+    files::write_text(&path, &content, expected)
 }
 
 /// Open the OS-native file picker and return the absolute path of the selected

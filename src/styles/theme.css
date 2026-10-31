@@ -75,8 +75,8 @@ body {
 }
 
 /*
- * The window shell: an optional sidebar column beside the pane area. The pane
- * area is its own positioned container so the layout renderer's percentage
+ * The window shell: optional sidebar and editor columns beside the pane area. The
+ * pane area is its own positioned container so the layout renderer's percentage
  * rectangles are relative to *it*, not to the whole window — otherwise opening
  * the sidebar would slide every pane under it.
  */
@@ -91,7 +91,8 @@ body {
 .layout-root {
   position: relative;
   flex: 1 1 auto;
-  min-width: 0;
+  /* The side panels give way before the terminals disappear. */
+  min-width: 160px;
   height: 100%;
 }
 

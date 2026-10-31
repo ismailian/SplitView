@@ -1,5 +1,35 @@
-import { describe, it, expect } from "vitest";
-import { clampDirSegments, MAX_DIR_SEGMENTS } from "./settings";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import {
+  clampDirSegments,
+  defaultSettings,
+  loadSettings,
+  MAX_DIR_SEGMENTS,
+} from "./settings";
+
+describe("remote resize setting", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const storing = (remote: unknown) =>
+    vi.stubGlobal("localStorage", {
+      getItem: () => JSON.stringify({ remote }),
+    });
+
+  it("is on by default, including for a store that predates it", () => {
+    expect(defaultSettings().remote.allowResize).toBe(true);
+    storing({ port: 9000 });
+    expect(loadSettings().remote.allowResize).toBe(true);
+  });
+
+  it("keeps a saved choice to turn it off", () => {
+    storing({ allowResize: false });
+    expect(loadSettings().remote.allowResize).toBe(false);
+  });
+
+  it("reads a corrupt value as off", () => {
+    storing({ allowResize: "yes" });
+    expect(loadSettings().remote.allowResize).toBe(false);
+  });
+});
 
 describe("clampDirSegments", () => {
   it("keeps a sane segment count", () => {

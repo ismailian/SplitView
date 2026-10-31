@@ -15,8 +15,9 @@
  * nothing, and a render rebuilds only the rows that differ.
  *
  * Fully keyboard-driven — j/k to move, l/Enter to expand, `c` to `cd` the
- * terminal there, Enter on a file to insert its path at the prompt. The mouse is
- * a convenience, never a requirement (CLAUDE.md §2.1).
+ * terminal there, Enter on a file to insert its path at the prompt, `e` to open
+ * it in the editor panel. The mouse is a convenience, never a requirement
+ * (CLAUDE.md §2.1).
  *
  * Rendering is deliberately plain: monospace rows with `├──`/`└──` connectors
  * drawn as text, coloured from the theme's ANSI variables, so the sidebar reads
@@ -32,6 +33,7 @@ import {
   type DirEntryInfo,
   type DirListing,
 } from "../ipc/commands";
+import { attachEdgeDrag } from "../layout/edgeDrag";
 import { compactPath, toShellPath } from "../paths";
 import {
   buildTree,
@@ -45,6 +47,8 @@ import {
 export interface FileTreeDeps {
   /** Insert a path at the focused terminal's prompt (shell-quoted, no newline). */
   onInsertPath(shellPath: string): void;
+  /** Open a file in the editor panel. */
+  onOpenFile(path: string): void;
   /** Run `cd <dir>` in the focused terminal. */
   onChangeDir(shellPath: string): void;
   /** Hand focus back to the terminal (Escape, or after acting on an entry). */
@@ -159,14 +163,19 @@ export class FileTree {
     this.footerEl = document.createElement("div");
     this.footerEl.className = "ft-footer";
     this.footerEl.textContent =
-      "j/k move · l/h fold · ⏎ open · c cd · u up · . hidden · r reload · </> width · esc term";
+      "j/k move · l/h fold · ⏎ insert · e edit · c cd · u up · . hidden · r reload · </> width · esc term";
 
     // Drag handle on the sidebar's edge. Mouse convenience only — `<`/`>`/`=`
     // do the same from the keyboard (CLAUDE.md §2.1, §18).
     const resizer = document.createElement("div");
     resizer.className = "ft-resizer";
     resizer.title = "Drag to resize (or < / > / = from the tree)";
-    this.attachResize(resizer);
+    attachEdgeDrag(resizer, {
+      width: () => this.el.getBoundingClientRect().width,
+      sign: 1,
+      resize: (px) => this.setWidth(px),
+      done: () => saveWidth(this.width),
+    });
 
     this.el.append(header, this.bodyEl, this.footerEl, resizer);
 
@@ -180,7 +189,7 @@ export class FileTree {
     });
 
     // Mouse convenience: click selects (and toggles a folder), double-click
-    // inserts a file's path. One listener for every row, so rows carry no
+    // opens a file in the editor. One listener for every row, so rows carry no
     // handlers of their own. All of it is reachable from the keyboard too.
     this.bodyEl.addEventListener("mousedown", (ev) => {
       const row = this.rowAt(ev.target);
@@ -192,7 +201,7 @@ export class FileTree {
     });
     this.bodyEl.addEventListener("dblclick", (ev) => {
       const row = this.rowAt(ev.target);
-      if (row && !row.entry.isDir) this.activate(row);
+      if (row && !row.entry.isDir) this.deps.onOpenFile(row.entry.path);
     });
 
     // A window that shrank can leave a previously fine width taking the whole
@@ -315,49 +324,6 @@ export class FileTree {
   private nudgeWidth(px: number): void {
     this.setWidth(px);
     saveWidth(this.width);
-  }
-
-  /**
-   * Pointer drag on the edge handle. Moves are coalesced to one width change per
-   * animation frame so a drag doesn't re-fit every terminal per mousemove
-   * (CLAUDE.md §13), and the listeners live on `window` so the drag survives the
-   * pointer leaving the handle's few pixels.
-   */
-  private attachResize(handle: HTMLElement): void {
-    handle.addEventListener("pointerdown", (ev) => {
-      ev.preventDefault(); // keep focus where it is; start no text selection
-      handle.classList.add("active");
-
-      const startX = ev.clientX;
-      const startWidth = this.el.getBoundingClientRect().width;
-      const prevCursor = document.body.style.cursor;
-      const prevSelect = document.body.style.userSelect;
-      document.body.style.cursor = "col-resize";
-      document.body.style.userSelect = "none";
-
-      let frame = 0;
-      let pending: number | null = null;
-      const flush = (): void => {
-        frame = 0;
-        if (pending !== null) this.setWidth(pending);
-      };
-      const move = (e: PointerEvent): void => {
-        pending = startWidth + (e.clientX - startX);
-        if (!frame) frame = requestAnimationFrame(flush);
-      };
-      const up = (e: PointerEvent): void => {
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", up);
-        if (frame) cancelAnimationFrame(frame);
-        this.setWidth(startWidth + (e.clientX - startX)); // commit the last move
-        saveWidth(this.width);
-        handle.classList.remove("active");
-        document.body.style.cursor = prevCursor;
-        document.body.style.userSelect = prevSelect;
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", up);
-    });
   }
 
   // --- loading -----------------------------------------------------------
@@ -572,6 +538,9 @@ export class FileTree {
         return true;
       case "Enter":
         if (row) this.activate(row);
+        return true;
+      case "e":
+        if (row && !row.entry.isDir) this.deps.onOpenFile(row.entry.path);
         return true;
       case "c":
         if (row) this.changeDir(row.entry);

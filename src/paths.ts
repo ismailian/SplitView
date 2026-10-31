@@ -34,6 +34,16 @@ export function baseName(p: string): string {
 }
 
 /**
+ * Resolve a path typed at the shell against that shell's directory. Absolute
+ * paths (POSIX, msys or native Windows) pass through; `cwd` is in whatever form
+ * the shell reported, which the backend accepts.
+ */
+export function resolvePath(cwd: string | null, p: string): string {
+  if (cwd === null || p.startsWith("/") || isWindowsPath(p)) return p;
+  return `${cwd.replace(/[\\/]+$/, "")}/${p}`;
+}
+
+/**
  * How the injected prompt renders the working directory, mirrored here so the
  * Settings preview shows the real thing.
  *

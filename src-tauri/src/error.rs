@@ -17,6 +17,9 @@ pub enum Error {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
+    #[error("{0}")]
+    File(String),
+
     #[error("watch error: {0}")]
     Watch(String),
 

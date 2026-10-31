@@ -138,6 +138,7 @@ export const DEFAULT_KEYMAP: KeymapConfig = {
     d: "detach_pane",
     n: "new_window",
     e: "toggle_sidebar",
+    "S-e": "toggle_editor",
     r: "reload_config",
     ",": "open_settings",
   },

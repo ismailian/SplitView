@@ -34,6 +34,8 @@ export interface AppActions {
   newWindow(): void;
   /** Show/hide the file sidebar, rooted at the focused terminal's directory. */
   toggleSidebar(): void;
+  /** Show/hide the editor panel on the right. */
+  toggleEditor(): void;
   /** Push the focused pane out of the layout, leaving its shell running. */
   backgroundPane(): void;
   /** Open the picker listing backgrounded panes (restore / kill). */
@@ -85,6 +87,7 @@ export const ACTION_INFO: Record<string, { label: string; category: string }> = 
   reload_config: { label: "Reload config", category: "App" },
   new_window: { label: "Open a new window", category: "App" },
   toggle_sidebar: { label: "Toggle file sidebar", category: "App" },
+  toggle_editor: { label: "Toggle editor panel", category: "App" },
 };
 
 export type ActionHandler = (a: AppActions) => void;
@@ -117,6 +120,7 @@ export const actionHandlers: Record<string, ActionHandler> = {
   show_background: (a) => a.showBackground(),
   new_window: (a) => a.newWindow(),
   toggle_sidebar: (a) => a.toggleSidebar(),
+  toggle_editor: (a) => a.toggleEditor(),
   reload_config: (a) => a.reloadConfig(),
 
   open_file_dialog: (a) => a.openFileDialog(),

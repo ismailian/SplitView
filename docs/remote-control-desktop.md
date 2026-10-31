@@ -468,7 +468,7 @@ Tokens are stored as a bare SHA-256 of the token. No KDF is needed: the token is
 | Idle timeout | 30 min without a frame → close |
 | Pairing attempts | 5 per code, then burned |
 | Connection attempts | per-IP token bucket, 10/min |
-| Remote resize | **disallowed** (§10.1) |
+| Remote resize | allowed, and only happens once the phone opts in too (§10.1) |
 | Filesystem commands (`read_dir`, `pick_file`) | **never exposed to remote** |
 | Audit log | append-only `remote/audit.log`: pair, approve, reject, connect, disconnect, revoke |
 | Visible indicator | shown whenever the server is enabled; distinct state while a session is live |
@@ -523,7 +523,7 @@ following the same visual rules as the rest of the app — thin lines, no chrome
 - **Pair a device** → modal with the QR, the code, and a countdown.
 - Paired devices list: name, platform, last seen, **Revoke**.
 - Live sessions: device, IP, connected since, **Disconnect**.
-- "Allow remote resize" — off by default, with a one-line explanation that it
+- "Allow remote resize" — on by default, with a one-line explanation that it
   reflows the desktop window too.
 
 The always-visible indicator while enabled is a 1px-tall accent strip or a small
@@ -539,14 +539,16 @@ corner dot, matching the existing backgrounded-panes indicator
 One PTY has one size; two viewers want different ones. This is the classic tmux
 multi-attach problem and there is no free answer.
 
-**Decision: the remote never resizes in v1.** The phone renders at the pane's
-existing `cols`/`rows` and scales its font (with horizontal scroll below a
-minimum legible size). A desktop-side opt-in ("Allow remote resize") enables the
-`resize` message and advertises the `resize` feature in `welcome`; without it the
-server answers `not_permitted`.
+**Decision: the remote never resizes unless the phone asks to.** By default the
+phone renders at the pane's existing `cols`/`rows` and scales its font (with
+horizontal scroll below a minimum legible size). Its "Fit terminal to phone"
+setting, off by default, resizes instead. The desktop's "Allow remote resize",
+on by default, enables the `resize` message and advertises the `resize` feature
+in `welcome`; with it off the server answers `not_permitted`.
 
 Rationale: an implicit reflow of the laptop window because someone picked up a
-phone is the kind of behaviour people uninstall software over.
+phone is the kind of behaviour people uninstall software over, so a reflow is
+always something the phone's user turned on.
 
 ### 10.2 Backpressure
 
