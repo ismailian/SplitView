@@ -70,6 +70,25 @@ npm run tauri build              # full installer bundle
 npm run tauri build -- --no-bundle   # compile the release binary only
 ```
 
+### Signing Windows builds
+
+`npm run tauri build` signs the app and installers through
+[`src-tauri/scripts/sign-windows.ps1`](./src-tauri/scripts/sign-windows.ps1) when
+one of these identities is set in the environment:
+
+```powershell
+# A certificate in the Windows store or on a token
+$env:SPLITVIEW_SIGN_THUMBPRINT = "<SHA-1 thumbprint>"
+
+# Or Azure Artifact Signing
+$env:SPLITVIEW_SIGN_DLIB = "<path to Azure.CodeSigning.Dlib.dll>"
+$env:SPLITVIEW_SIGN_METADATA = "<path to metadata.json>"
+```
+
+With neither set, the build warns and stays unsigned. Set
+`$env:SPLITVIEW_SIGN_REQUIRED = "1"` on release builds so that a missing identity
+fails the build instead.
+
 ## Configuration
 
 Copy [`config.example.toml`](./config.example.toml) to the platform config dir
