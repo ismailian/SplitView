@@ -30,6 +30,9 @@ target/
 src-tauri/gen/schemas
 src-tauri/target/
 
+# Website installer downloads
+site/downloads/
+
 # OS files
 .DS_Store
 Thumbs.db
