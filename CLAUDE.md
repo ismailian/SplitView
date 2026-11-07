@@ -72,9 +72,9 @@ the keymap.
 | Config | **TOML** | User config at `~/.config/splitview/config.toml` (platform-appropriate dir). |
 | Remote control | **`tokio` + `tokio-tungstenite` + `tokio-rustls`/`rustls` (ring) + `rcgen` + `mdns-sd`** | Opt-in encrypted WebSocket server; see §21. `ring` is the pinned crypto provider — the default `aws-lc-rs` needs cmake and nasm, which the Tauri toolchain does not already provide. |
 
-**Primary platforms: macOS and Linux.** Windows is explicitly secondary and we
-do **not** default to PowerShell or cmd.exe (see §18). If Windows is ever
-supported it goes through a POSIX-style shell, not the Windows prompt.
+**Primary platforms: macOS and Linux.** Windows is secondary. A POSIX shell is
+still the default everywhere it exists (Git Bash on Windows), but PowerShell and
+cmd.exe are available as *user-chosen* profiles (see §8, §18).
 
 ---
 
@@ -155,6 +155,8 @@ splitview/
 │   │   ├── EditorPanel.ts     ← the code editor docked on the right (tabs, disk)
 │   │   ├── model.ts           ← EOL/BOM round trip, indent detection (TESTED)
 │   │   └── theme.ts           ← CodeMirror theme, from the CSS variables
+│   ├── profiles/
+│   │   └── ShellPicker.ts     ← first-run / <prefix> p shell picker (TESTED)
 │   ├── background/
 │   │   └── BackgroundPanel.ts ← backgrounded-pane indicator + picker
 │   ├── remote/                ← remote control, webview side (see §21)
@@ -187,6 +189,7 @@ splitview/
         ├── state.rs           ← AppState, PtyHandle, PaneId
         ├── pty.rs             ← spawn/read/write/resize/kill via portable-pty
         ├── shell.rs           ← shell detection + prompt injection (see §8)
+        ├── profiles.rs        ← installed shells (Git Bash, PowerShell, cmd…) (TESTED)
         ├── watch.rs           ← file-sidebar filesystem watch (notify), debounced
         ├── files.rs           ← text file read/stat/save for the editor (TESTED)
         ├── commands.rs        ← #[tauri::command] functions
@@ -313,8 +316,28 @@ only the prompt variable.
   source "${HOME}/.zshrc" 2>/dev/null
   PROMPT='%n @ %~ %# '   # %n=user  %~=cwd  %#= % / #
   ```
+- **PowerShell (5.1 / 7):** spawned with `-NoExit -EncodedCommand <init>`. The
+  user's `$PROFILE` runs first, then the init defines a `prompt` function
+  (same look and `SV_SHOW_*` toggles, OSC 7 with a native path), aliases as
+  functions forwarding `@args`, and `splitview`. Encoded, not a `.ps1`: a fresh
+  Windows install's `Restricted` policy refuses script files.
+- **cmd.exe:** `PROMPT` env var (`$P`, `$T`, `$E…` — no branch, no dir
+  shortening, nothing to compute them with) plus `/K <init.cmd>` for `doskey`
+  aliases and the banner. That batch must end with `@echo on`, or cmd shows no
+  prompt at all.
 - **fish / others:** documented best-effort; if we can't cleanly inject, fall
   back to the user's own prompt and log a warning rather than mangle it.
+
+### Which shell: profiles
+
+`profiles.rs` lists the installed shells (`list_shell_profiles`). On first launch
+no default is saved, so the window shows a picker before spawning anything and
+saves the pick (`settings.shell.defaultProfile`); if the shell later fails to
+start, the picker comes back with the reason. `<prefix> p` opens a pane with any
+profile or changes the default; Settings → Shell changes the default too. A
+`shell` in the config file outranks the saved choice. Each PTY remembers its
+`ShellFamily`, which the frontend uses to quote paths it types
+(`quotePathFor` in `src/shellQuote.ts`).
 
 The prompt template is configurable (`prompt = "{user} @ {cwd} $ "` in config).
 `shell.rs` owns translating that template into per-shell prompt syntax. Keep
@@ -387,6 +410,7 @@ split HORIZONTALLY (horizontal divider, `split_down`)
 | Toggle the file sidebar | `e` | `toggle_sidebar` |
 | Toggle the editor panel | `Shift+e` | `toggle_editor` |
 | Open Settings | `,` | `open_settings` |
+| Pick a shell (new pane / set default) | `p` | `pick_shell` |
 | Reload config | `r` | `reload_config` |
 | Send literal prefix to shell | press prefix again | — |
 
@@ -469,11 +493,12 @@ Keep all Tauri calls behind typed wrappers in `src/ipc/commands.ts`. Never call
 
 | Command | Signature (logical) | Purpose |
 |---|---|---|
-| `spawn_pty` | `(channel: Channel<Vec<u8>>, opts: SpawnOpts) -> Result<PaneId>` | Open PTY, spawn shell, start reader thread streaming to `channel`. |
+| `spawn_pty` | `(channel: Channel<Vec<u8>>, opts: SpawnOpts) -> Result<SpawnedPane>` | Open PTY, spawn shell, start reader thread streaming to `channel`. Returns `{ paneId, family }` (`posix` / `powershell` / `cmd`). |
 | `write_pty` | `(pane_id: PaneId, data: Vec<u8>) -> Result<()>` | Write keystrokes/bytes to the PTY master. |
 | `resize_pty` | `(pane_id: PaneId, cols: u16, rows: u16) -> Result<()>` | Resize the PTY. |
 | `close_pty` | `(pane_id: PaneId) -> Result<()>` | Kill child, drop master, remove handle. |
 | `list_panes` | `() -> Result<Vec<PaneId>>` | Mostly for debugging/recovery. |
+| `list_shell_profiles` | `() -> Vec<ShellProfile>` | Installed shells (`profiles.rs`), best default first. Feeds the first-run picker, `<prefix> p` and Settings → Shell. |
 | `read_dir` | `(path: Option<String>) -> Result<DirListing>` | Directory listing for the file sidebar. Accepts msys paths (normalized), sorts dirs-first, caps the entry count. |
 | `fs_watch` | `(window, on_change: Channel<Vec<String>>) -> Result<()>` | Start the calling window's sidebar watch; batches of changed directories arrive on the channel. Dropped automatically when the window is destroyed. |
 | `fs_watch_dirs` | `(window, dirs: Vec<String>) -> Result<()>` | Replace the watched set (the sidebar's root + open folders); only the delta reaches the OS. |
@@ -611,7 +636,7 @@ naively. Treat them as hard requirements.
 
 Tauri v2 uses an explicit permission model. **Expose only what SplitView
 needs.** In `src-tauri/capabilities/default.json`, allow exactly the custom
-commands (`spawn_pty`, `write_pty`, `resize_pty`, `close_pty`, `list_panes`) and
+commands (`spawn_pty`, `write_pty`, `resize_pty`, `close_pty`, `list_panes`, `list_shell_profiles`) and
 nothing broad. Do not enable filesystem/shell plugin permissions the app
 doesn't use. Spawning the shell happens through our own `portable-pty` code, not
 through an over-broad plugin grant. When you add a command, add its permission
@@ -687,9 +712,10 @@ npm run test        # vitest (layout tree, keymap)
 
 ## 18. Non-goals / constraints (do not "helpfully" add these)
 
-- **No PowerShell or cmd.exe default.** SplitView targets a minimal POSIX shell
-  experience. The default shell is the user's `$SHELL` (bash/zsh/fish), not a
-  Windows prompt.
+- **No PowerShell or cmd.exe *by default*.** SplitView targets a minimal POSIX
+  shell experience: the automatic choice is `$SHELL`, or Git Bash on Windows.
+  PowerShell and cmd are offered as profiles the user picks (§8) — never
+  silently preferred over an installed POSIX shell.
 - **Not a persistent multiplexer server.** Unlike tmux, v1 does not detach /
   reattach sessions that survive the app closing. Panes live with the window.
   Remote *viewing and control* is in scope (§21) and session *persistence* is
@@ -747,6 +773,13 @@ npm run test        # vitest (layout tree, keymap)
 - **Resize mismatch.** If xterm.js cols/rows and the PTY size drift apart, output
   wraps wrong and full-screen TUIs corrupt. Always resize both, together.
 - **macOS non-login shell** → missing PATH/Homebrew. Spawn a login shell.
+- **`bash` is not on a Windows PATH.** Git for Windows adds only `Git\cmd`
+  (git.exe, no bash.exe), and a GUI app has no `$SHELL`, so spawning a bare
+  `bash` fails on a fresh machine — which used to leave a black window, because
+  the failed first spawn rejected `App.start()` silently. `profiles.rs` looks in
+  Git's install directory instead, and skips the WSL stubs (`System32\bash.exe`,
+  `WindowsApps\bash.exe`) that print an install hint and exit. A failed spawn
+  must always end in the picker or a visible message, never an empty window.
 - **No locale = garbled line editing.** A GUI app often has no `LANG` (always on
   Windows, on macOS from the Dock), and `--rcfile` skips the profile that sets
   one, so bash runs in the "C" locale and measures the prompt's `└──╼` in bytes

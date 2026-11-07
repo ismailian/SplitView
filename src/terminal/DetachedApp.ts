@@ -22,6 +22,7 @@ import {
   requestReattach,
   stashHandoff,
   takeHandoff,
+  listShellProfiles,
 } from "../ipc/commands";
 import { destroyCurrentWindow, openNewWindow } from "../ipc/windows";
 import { Pane } from "./Pane";
@@ -43,7 +44,7 @@ import {
   type Settings,
 } from "../settings/settings";
 import { SettingsWindow } from "../settings/SettingsWindow";
-import { shellQuote } from "../shellQuote";
+import { quotePathFor } from "../shellQuote";
 import { RemoteBridge } from "../remote/RemoteBridge";
 import { paneInfo } from "../remote/roster";
 
@@ -89,6 +90,7 @@ export class DetachedApp implements AppActions {
         globalBindings: DEFAULT_KEYMAP.globalBindings ?? {},
       },
       actionInfo: ACTION_INFO,
+      listProfiles: () => listShellProfiles(),
     });
     this.remote = new RemoteBridge({
       windowLabel: getCurrentWindow().label,
@@ -286,6 +288,12 @@ export class DetachedApp implements AppActions {
     this.keymap.setConfig(this.keymapConfig());
   }
 
+  /** A detached window holds one pane and has nowhere to split a new shell
+   * into, so `<prefix> p` goes to Settings → Shell, where the default is set. */
+  pickShell(): void {
+    this.settingsWindow.open("shell");
+  }
+
   openSettings(): void {
     this.settingsWindow.open();
   }
@@ -297,7 +305,7 @@ export class DetachedApp implements AppActions {
       .then((path) => {
         if (!path) return;
         pane.focus();
-        pane.sendText(shellQuote(path));
+        pane.sendText(quotePathFor(pane.family, path));
       })
       .catch(() => {});
   }

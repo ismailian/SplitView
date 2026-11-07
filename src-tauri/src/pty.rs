@@ -13,7 +13,8 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter};
 
 use crate::error::{Error, Result};
-use crate::shell::{build_command, ShellConfig};
+use crate::profiles::ShellFamily;
+use crate::shell::{build_command, detect_program, ShellConfig};
 use crate::state::{OutputSink, PaneId, PtyHandle};
 
 /// Event name emitted (with the `PaneId` payload) when a pane's shell exits, so
@@ -58,6 +59,7 @@ pub fn spawn(
         })
         .map_err(|e| Error::Pty(e.to_string()))?;
 
+    let family = ShellFamily::of(&detect_program(shell_cfg));
     let cmd = build_command(shell_cfg)?;
     let mut child = pair
         .slave
@@ -125,5 +127,6 @@ pub fn spawn(
         master: pair.master,
         killer,
         output,
+        family,
     })
 }

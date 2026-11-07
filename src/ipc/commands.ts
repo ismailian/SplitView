@@ -53,6 +53,35 @@ export interface SpawnOpts {
 
 export type PaneId = string;
 
+/**
+ * Which syntax a pane's shell speaks: decides how a path the app types for the
+ * user is quoted (`src/shellQuote.ts`). Mirrors `ShellFamily` in
+ * `src-tauri/src/profiles.rs`.
+ */
+export type ShellFamily = "posix" | "powershell" | "cmd";
+
+/** An installed shell the user can pick (`list_shell_profiles`). */
+export interface ShellProfile {
+  /** Stable id, stored as the default (`git-bash`, `powershell`, `cmd`, …). */
+  id: string;
+  /** Display name (`Git Bash`, `Windows PowerShell`, …). */
+  name: string;
+  /** Absolute path to the executable; passed back as `SpawnOpts.shell`. */
+  program: string;
+  family: ShellFamily;
+}
+
+/** What `spawn_pty` returns. */
+export interface SpawnedPane {
+  paneId: PaneId;
+  family: ShellFamily;
+}
+
+/** The shells installed on this machine, best default first. */
+export async function listShellProfiles(): Promise<ShellProfile[]> {
+  return invoke<ShellProfile[]>("list_shell_profiles");
+}
+
 /** Callback for a chunk of raw PTY output. */
 export type OutputHandler = (bytes: Uint8Array) => void;
 
@@ -64,10 +93,10 @@ export type OutputHandler = (bytes: Uint8Array) => void;
 export async function spawnPty(
   opts: SpawnOpts,
   onOutput: OutputHandler,
-): Promise<PaneId> {
+): Promise<SpawnedPane> {
   const channel = new Channel<number[]>();
   channel.onmessage = (msg) => onOutput(new Uint8Array(msg));
-  return invoke<PaneId>("spawn_pty", { onOutput: channel, opts });
+  return invoke<SpawnedPane>("spawn_pty", { onOutput: channel, opts });
 }
 
 /**
@@ -79,10 +108,10 @@ export async function spawnPty(
 export async function attachPty(
   paneId: PaneId,
   onOutput: OutputHandler,
-): Promise<void> {
+): Promise<ShellFamily> {
   const channel = new Channel<number[]>();
   channel.onmessage = (msg) => onOutput(new Uint8Array(msg));
-  await invoke("attach_pty", { paneId, onOutput: channel });
+  return invoke<ShellFamily>("attach_pty", { paneId, onOutput: channel });
 }
 
 /** Write keystrokes/bytes to a pane's PTY. */

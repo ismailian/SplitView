@@ -121,3 +121,28 @@
   color: var(--sv-dim);
   font-size: 11px;
 }
+
+/* The shell-profile picker (src/profiles/ShellPicker.ts) reuses the rows above;
+ * this is only its explanatory line. */
+.picker-message {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--sv-line);
+  color: var(--sv-dim);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.picker-message.picker-error {
+  color: var(--ansi-1);
+}
+
+/* Shown in the pane area when no shell at all could be started. */
+.startup-error {
+  padding: 24px;
+  color: var(--fg);
+  font-family: var(--font-family);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}

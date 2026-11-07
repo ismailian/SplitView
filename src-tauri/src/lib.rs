@@ -6,6 +6,7 @@
 mod commands;
 mod error;
 mod files;
+mod profiles;
 mod pty;
 mod remote;
 mod shell;
@@ -51,6 +52,7 @@ pub fn run() {
             commands::resize_pty,
             commands::close_pty,
             commands::list_panes,
+            commands::list_shell_profiles,
             commands::attach_pty,
             commands::stash_handoff,
             commands::take_handoff,

@@ -20,7 +20,10 @@ import {
   type PaneId,
   type Alias,
   type PromptInfo,
+  type ShellFamily,
+  type SpawnedPane,
 } from "../ipc/commands";
+import { parseOsc7 } from "../paths";
 
 /** Per-spawn extras layered on top of the base `Config` (CLAUDE.md §4). */
 export interface SpawnExtras {
@@ -32,6 +35,8 @@ export interface SpawnExtras {
   banner?: string;
   /** Prompt info toggles. */
   promptInfo?: PromptInfo;
+  /** Shell to run (a profile's program); overrides `Config.shell`. */
+  shell?: string;
 }
 
 const RESIZE_DEBOUNCE_MS = 40;
@@ -75,6 +80,8 @@ export class Pane {
   private currentCwd: string | null = null;
   /** Latest terminal title (OSC 0/2), used to name a backgrounded pane. */
   private currentTitle: string | null = null;
+  /** Which syntax the shell speaks, as the backend reported at spawn/attach. */
+  private shellFamily: ShellFamily = "posix";
 
   private constructor(
     el: HTMLDivElement,
@@ -172,23 +179,32 @@ export class Pane {
     // started in — so the sidebar doesn't flash the home directory in between.
     pane.currentCwd = spawn.cwd ?? null;
 
-    const id = await spawnPty(
-      {
-        cols: pane.term.cols,
-        rows: pane.term.rows,
-        cwd: spawn.cwd,
-        shell: cfg.shell,
-        prompt: cfg.prompt,
-        promptStyle: cfg.promptStyle,
-        aliases: spawn.aliases,
-        promptInfo: spawn.promptInfo,
-        banner: spawn.banner,
-      },
-      (bytes) => {
-        if (!pane.disposed) pane.term.write(bytes);
-      },
-    );
-    pane.paneId = id;
+    let spawned: SpawnedPane;
+    try {
+      spawned = await spawnPty(
+        {
+          cols: pane.term.cols,
+          rows: pane.term.rows,
+          cwd: spawn.cwd,
+          shell: spawn.shell ?? cfg.shell,
+          prompt: cfg.prompt,
+          promptStyle: cfg.promptStyle,
+          aliases: spawn.aliases,
+          promptInfo: spawn.promptInfo,
+          banner: spawn.banner,
+        },
+        (bytes) => {
+          if (!pane.disposed) pane.term.write(bytes);
+        },
+      );
+    } catch (err) {
+      // The shell could not be started (not installed, wrong path). Drop the
+      // terminal we mounted for it; the caller decides what to show instead.
+      void pane.dispose();
+      throw err;
+    }
+    pane.paneId = spawned.paneId;
+    pane.shellFamily = spawned.family;
 
     return pane;
   }
@@ -210,7 +226,7 @@ export class Pane {
     if (serialized) pane.term.write(serialized);
     pane.paneId = existingId;
 
-    await attachPty(existingId, (bytes) => {
+    pane.shellFamily = await attachPty(existingId, (bytes) => {
       if (!pane.disposed) pane.term.write(bytes);
     });
 
@@ -219,6 +235,11 @@ export class Pane {
 
   get id(): PaneId | null {
     return this.paneId;
+  }
+
+  /** Which syntax this pane's shell speaks (for quoting typed paths). */
+  get family(): ShellFamily {
+    return this.shellFamily;
   }
 
   /** Latest cwd reported by the shell (OSC 7), for inheriting on split. */
@@ -352,23 +373,4 @@ export class Pane {
 
 function encode(s: string): Uint8Array {
   return new TextEncoder().encode(s);
-}
-
-/**
- * Parse an OSC 7 payload (`file://host/path`) into the bare path. The host is
- * discarded; the path is percent-decoded best-effort. Returns null if it isn't
- * a `file://` URL. On Windows the path arrives in msys form (`/c/Users/...`);
- * the backend converts it to a native path when spawning the next pane.
- */
-function parseOsc7(data: string): string | null {
-  if (!data.startsWith("file://")) return null;
-  const rest = data.slice("file://".length);
-  const slash = rest.indexOf("/");
-  if (slash < 0) return null;
-  const path = rest.slice(slash);
-  try {
-    return decodeURIComponent(path);
-  } catch {
-    return path; // malformed escape; use the raw path
-  }
 }

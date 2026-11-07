@@ -14,6 +14,7 @@ use tauri::ipc::Channel;
 use tokio::sync::broadcast;
 
 use crate::error::Error;
+use crate::profiles::ShellFamily;
 use crate::watch::DirWatch;
 
 /// Mirrors the frontend's `PaneId` (an opaque string).
@@ -111,6 +112,10 @@ pub struct PtyHandle {
     /// Where the reader thread streams output: the owning window's channel plus
     /// any remote subscribers (CLAUDE.md §4, §21).
     pub output: Arc<OutputSink>,
+    /// Which shell syntax runs in this PTY. Travels with the pane when it moves
+    /// between windows (`attach_pty` returns it), so the window it lands in
+    /// still quotes inserted paths the way that shell expects.
+    pub family: ShellFamily,
 }
 
 #[derive(Default)]

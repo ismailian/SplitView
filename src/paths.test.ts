@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { toShellPath, baseName, compactPath, promptDir, resolvePath } from "./paths";
+import {
+  toShellPath,
+  baseName,
+  compactPath,
+  parseOsc7,
+  promptDir,
+  resolvePath,
+} from "./paths";
 
 describe("toShellPath", () => {
   it("converts native Windows paths to msys form", () => {
@@ -90,5 +97,27 @@ describe("resolvePath", () => {
 
   it("has nothing to join to before the shell reports a directory", () => {
     expect(resolvePath(null, "a.txt")).toBe("a.txt");
+  });
+});
+
+describe("parseOsc7", () => {
+  it("returns a POSIX or msys path as reported", () => {
+    expect(parseOsc7("file://host/home/x/proj")).toBe("/home/x/proj");
+    expect(parseOsc7("file://host/c/Users/x")).toBe("/c/Users/x");
+  });
+
+  it("turns a native Windows path (PowerShell, cmd) back into native form", () => {
+    expect(parseOsc7("file://PC/C:/Users/x/a%20b")).toBe("C:\\Users\\x\\a b");
+    expect(parseOsc7("file://localhost/C:\\Users\\x")).toBe("C:\\Users\\x");
+    expect(parseOsc7("file://localhost/D:")).toBe("D:\\");
+  });
+
+  it("rejects anything that is not a file URL", () => {
+    expect(parseOsc7("http://x/y")).toBeNull();
+    expect(parseOsc7("file://nohostpath")).toBeNull();
+  });
+
+  it("keeps a path with a literal percent sign", () => {
+    expect(parseOsc7("file://h/C:/100%/x")).toBe("C:\\100%\\x");
   });
 });

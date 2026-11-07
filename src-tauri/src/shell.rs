@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use portable_pty::CommandBuilder;
 
 use crate::error::Result;
+use crate::profiles;
 
 /// Inputs that decide how the shell is launched. The prompt `template` uses the
 /// product-level placeholders `{user}` and `{cwd}`; translating those into each
@@ -114,42 +115,44 @@ enum ShellKind {
     Zsh,
     Fish,
     Sh,
+    PowerShell,
+    Cmd,
     Other,
 }
 
-fn detect_program(cfg: &ShellConfig) -> String {
+/// The shell to run: the explicit choice (a profile picked in the app, or the
+/// config's `shell`), else `$SHELL`, else the first installed shell
+/// [`profiles::detect`] finds — a POSIX one whenever there is one.
+///
+/// `$SHELL` is skipped on Windows: it is only set there when SplitView was
+/// started from an msys shell, and then it is an msys path (`/usr/bin/bash`) the
+/// Windows process API cannot run. A bare `bash` is the very last resort; on a
+/// fresh Windows machine it is exactly what used to fail — Git for Windows does
+/// not put `bash.exe` on `PATH` — and left a window with no terminal in it.
+pub fn detect_program(cfg: &ShellConfig) -> String {
     if let Some(p) = &cfg.program {
         if !p.trim().is_empty() {
             return p.clone();
         }
     }
-    if let Ok(s) = std::env::var("SHELL") {
-        if !s.trim().is_empty() {
-            return s;
+    if !cfg!(windows) {
+        if let Ok(s) = std::env::var("SHELL") {
+            if !s.trim().is_empty() {
+                return s;
+            }
         }
     }
-    for candidate in ["/bin/bash", "/bin/zsh", "/bin/sh"] {
-        if std::path::Path::new(candidate).exists() {
-            return candidate.to_string();
-        }
-    }
-    // Last resort: rely on PATH resolution. We never default to PowerShell or
-    // cmd.exe (CLAUDE.md §18) — a POSIX shell is assumed.
-    "bash".to_string()
+    profiles::default_program().unwrap_or_else(|| "bash".to_string())
 }
 
 fn kind_of(program: &str) -> ShellKind {
-    let base = program
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(program)
-        .to_lowercase();
-    let base = base.strip_suffix(".exe").unwrap_or(&base);
-    match base {
+    match profiles::base_name(program).as_str() {
         "bash" => ShellKind::Bash,
         "zsh" => ShellKind::Zsh,
         "fish" => ShellKind::Fish,
         "sh" | "dash" => ShellKind::Sh,
+        "powershell" | "pwsh" => ShellKind::PowerShell,
+        "cmd" => ShellKind::Cmd,
         _ => ShellKind::Other,
     }
 }
@@ -528,6 +531,240 @@ fn ensure_utf8_locale(cmd: &mut CommandBuilder) {
     }
 }
 
+/// PowerShell helpers and the cwd report, shared by both prompt styles.
+///
+/// `__sv_dir` mirrors `__sv_tilde` + `__sv_dir` from the bash setup (and
+/// `promptDir` in `src/paths.ts`), on the native `\` separator: `$HOME` collapses
+/// to `~` (case-insensitively, as Windows paths are), then either the last
+/// `SV_DIR_SEGMENTS` segments or the whole path with its middle elided.
+///
+/// `__sv_osc7` reports the directory as `file://host/C:/Users/x`; the frontend
+/// turns that back into `C:\Users\x`. Outside the filesystem provider (`cd HKLM:`)
+/// there is no directory to report, so nothing is sent.
+const PS_COMMON: &str = r##"
+function global:__sv_dir([string]$p) {
+  if ($HOME -and ($p -eq $HOME -or $p.StartsWith($HOME + '\', [StringComparison]::OrdinalIgnoreCase))) {
+    $p = '~' + $p.Substring($HOME.Length)
+  }
+  $n = 0
+  [void][int]::TryParse("$env:SV_DIR_SEGMENTS", [ref]$n)
+  $parts = $p.Split('\')
+  if ($n -gt 0) {
+    $named = @($parts | Where-Object { $_ -ne '' })
+    if ($named.Count -gt $n) { return ($named[(-$n)..(-1)] -join '\') }
+    return $p
+  }
+  if ($parts.Count - 1 -lt 3) { return $p }
+  return "$($parts[0])\$($parts[1])\...\$($parts[-1])"
+}
+function global:__sv_osc7 {
+  $loc = $ExecutionContext.SessionState.Path.CurrentLocation
+  if ($loc.Provider.Name -ne 'FileSystem') { return '' }
+  return "$([char]27)]7;file://$env:COMPUTERNAME/" + ($loc.ProviderPath -replace '\\', '/') + [char]7
+}
+$global:__sv_git = [bool](Get-Command git -ErrorAction SilentlyContinue)
+"##;
+
+/// PowerShell counterpart of [`PARROT_BASH_SETUP`]: the same two-line frame and
+/// `SV_SHOW_*` toggles, rebuilt in a `prompt` function. `$?` and
+/// `$LASTEXITCODE` are captured first and the latter restored last, so the git
+/// call that finds the branch never masks the exit code of what the user ran.
+/// The colour is reset before input: PSReadLine colours the typed command itself.
+const PARROT_PS_SETUP: &str = r##"
+function global:prompt {
+  $ok = $?
+  $ec = $global:LASTEXITCODE
+  $e = [char]27
+  $r = "$e[1;31m"
+  $line = "$r┌"
+  $su = $env:SV_SHOW_USER -ne '0'
+  $sh = $env:SV_SHOW_HOST -ne '0'
+  if ($su -or $sh) {
+    if ($su -and $sh) { $uh = "$env:USERNAME@$env:COMPUTERNAME" } elseif ($su) { $uh = $env:USERNAME } else { $uh = $env:COMPUTERNAME }
+    $line += "─[$e[1;37m$uh$r]"
+  }
+  if ($env:SV_SHOW_DIR -ne '0') {
+    $line += "─[$e[1;34m$(__sv_dir $ExecutionContext.SessionState.Path.CurrentLocation.Path)$r]"
+  }
+  if ($env:SV_SHOW_BRANCH -ne '0' -and $global:__sv_git) {
+    $b = git symbolic-ref --quiet --short HEAD 2>$null
+    if ($b) { $line += "─[$e[1;33m$b$r]" }
+  }
+  if ($env:SV_SHOW_TIME -eq '1') {
+    $line += "─[$e[1;36m$(Get-Date -Format HH:mm:ss)$r]"
+  }
+  if ($env:SV_SHOW_EXIT -eq '1' -and -not $ok) {
+    $code = if ($ec) { $ec } else { 1 }
+    $line += "─[$r✗ $code$r]"
+  }
+  $global:LASTEXITCODE = $ec
+  return (__sv_osc7) + $line + "`n$r└──╼ $e[1;32mPS>$e[0m "
+}
+"##;
+
+/// PowerShell single-quoted literal: the only escape is `'` → `''`.
+fn ps_squote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// The plain-template prompt for PowerShell: `{user}` and `{cwd}` are filled in
+/// on every prompt, the cwd shortened by the same `__sv_dir` as the Parrot look.
+fn plain_ps_setup(template: &str) -> String {
+    format!(
+        "function global:prompt {{\n  $ec = $global:LASTEXITCODE\n  $t = {}\n  \
+         $t = $t.Replace('{{user}}', \"$env:USERNAME\").Replace('{{cwd}}', (__sv_dir $ExecutionContext.SessionState.Path.CurrentLocation.Path))\n  \
+         $global:LASTEXITCODE = $ec\n  return (__sv_osc7) + $t\n}}\n",
+        ps_squote(template)
+    )
+}
+
+/// Aliases, the `splitview` app command and the banner, in PowerShell.
+///
+/// A PowerShell alias cannot carry arguments, so each alias is a function that
+/// forwards `@args` to the command. Built-in aliases (`ls`, `cd`, …) outrank
+/// functions, so a same-named one is removed first. The command is the user's
+/// own code from Settings, exactly as it is in the bash alias.
+fn ps_app_snippet(aliases: &[Alias], banner: &str) -> String {
+    let mut s = String::new();
+    for a in aliases {
+        if valid_alias_name(&a.name) {
+            s.push_str(&format!(
+                "Remove-Item -Path 'Alias:{0}' -Force -ErrorAction SilentlyContinue\n\
+                 function global:{0} {{ {1} @args }}\n",
+                a.name, a.command
+            ));
+        }
+    }
+    s.push_str(
+        "function global:splitview { [Console]::Write(\"$([char]27)]5170;$($args -join ' ')$([char]7)\") }\n",
+    );
+    if !banner.is_empty() {
+        for line in banner.split('\n') {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            s.push_str(&format!(
+                "[Console]::WriteLine({}.Replace('\\e', [string][char]27).Replace('\\033', [string][char]27))\n",
+                ps_squote(line)
+            ));
+        }
+    }
+    s
+}
+
+/// The full PowerShell init, passed as `-EncodedCommand` (base64 of UTF-16LE).
+///
+/// An encoded command rather than a script file, because a fresh Windows install
+/// has the `Restricted` execution policy, which refuses to run any `.ps1` —
+/// and bypassing that for the whole session would also start running profile
+/// scripts the user's policy blocks. The user's `$PROFILE` loads before the
+/// command (exactly as `.bashrc` does before our rcfile), so our prompt wins.
+fn ps_encoded_init(cfg: &ShellConfig) -> String {
+    use base64::Engine;
+    let prompt = match cfg.style {
+        PromptStyle::Parrot => PARROT_PS_SETUP.to_string(),
+        PromptStyle::Plain => plain_ps_setup(&cfg.prompt),
+    };
+    let script = format!(
+        "{PS_COMMON}\n{prompt}\n{}",
+        ps_app_snippet(&cfg.aliases, &cfg.banner)
+    );
+    let utf16: Vec<u8> = script
+        .encode_utf16()
+        .flat_map(|u| u.to_le_bytes())
+        .collect();
+    base64::engine::general_purpose::STANDARD.encode(utf16)
+}
+
+/// `$` is cmd's prompt escape character; a literal one is `$$`.
+fn cmd_prompt_escape(s: &str) -> String {
+    s.replace('$', "$$")
+}
+
+/// The `PROMPT` variable for cmd.exe. cmd has no prompt hook, only `$`-codes
+/// expanded on every prompt, so this is as much of the look as it can carry:
+/// user@host (fixed at spawn), the full directory (`$P` — no shortening and no
+/// branch, there is nothing to compute them with) and the clock (`$T`). It opens
+/// with the OSC 7 cwd report, `$E…$E\`, so the sidebar and splits follow `cd`.
+fn cmd_prompt(cfg: &ShellConfig) -> String {
+    let user = cmd_prompt_escape(&std::env::var("USERNAME").unwrap_or_default());
+    let host = cmd_prompt_escape(&std::env::var("COMPUTERNAME").unwrap_or_default());
+    let osc7 = "$E]7;file://localhost/$P$E\\";
+    match cfg.style {
+        PromptStyle::Plain => {
+            let t = cmd_prompt_escape(&cfg.prompt)
+                .replace("{user}", &user)
+                .replace("{cwd}", "$P");
+            format!("{osc7}{t}")
+        }
+        PromptStyle::Parrot => {
+            let pi = cfg.prompt_info;
+            let r = "$E[1;31m";
+            let mut line = format!("{r}┌");
+            if pi.user || pi.host {
+                let uh = match (pi.user, pi.host) {
+                    (true, true) => format!("{user}@{host}"),
+                    (true, false) => user.clone(),
+                    _ => host.clone(),
+                };
+                line.push_str(&format!("─[$E[1;37m{uh}{r}]"));
+            }
+            if pi.dir {
+                line.push_str(&format!("─[$E[1;34m$P{r}]"));
+            }
+            if pi.time {
+                line.push_str(&format!("─[$E[1;36m$T{r}]"));
+            }
+            // The colour is left un-reset, as in bash, so the typed command is
+            // green too.
+            format!("{osc7}{line}$_{r}└──╼ $E[1;32m>$S")
+        }
+    }
+}
+
+/// Escape a line for `echo` in a batch file: `%` doubles (or it would expand),
+/// and the redirection/chaining characters take a `^`.
+fn batch_echo_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '%' => out.push_str("%%"),
+            '^' | '&' | '|' | '<' | '>' => {
+                out.push('^');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// The batch file cmd runs with `/K`: aliases as `doskey` macros (which, like a
+/// bash alias, take arguments via `$*`) and the banner. `@echo on` must come
+/// last — `/K` keeps the echo state the batch leaves, and with echo off cmd
+/// shows no prompt at all. The batch is read in the console's code page, so a
+/// non-ASCII banner shows garbled; the `PROMPT` itself is unaffected (it is an
+/// environment variable, which is UTF-16).
+fn cmd_init(cfg: &ShellConfig) -> String {
+    let mut s = String::from("@echo off\r\n");
+    for a in &cfg.aliases {
+        if valid_alias_name(&a.name) {
+            s.push_str(&format!(
+                "doskey {}={} $*\r\n",
+                a.name,
+                a.command.replace('%', "%%")
+            ));
+        }
+    }
+    if !cfg.banner.is_empty() {
+        for line in cfg.banner.split('\n') {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let line = line.replace("\\e", "\u{1b}").replace("\\033", "\u{1b}");
+            s.push_str(&format!("echo({}\r\n", batch_echo_escape(&line)));
+        }
+    }
+    s.push_str("@echo on\r\n");
+    s
+}
+
 /// Build the `CommandBuilder` for the user's shell with prompt injection wired
 /// in. The environment is inherited from the parent process by default, so
 /// PATH/aliases/completions survive.
@@ -575,6 +812,22 @@ pub fn build_command(cfg: &ShellConfig) -> Result<CommandBuilder> {
             let zdot = zsh_zdotdir(&format!("{setup}\n{OSC7_ZSH}\n{app}\n{banner}"))?;
             cmd.env("ZDOTDIR", &zdot);
             cmd.arg("-i");
+        }
+        ShellKind::PowerShell => {
+            // -NoExit keeps the session open after the init; the user's
+            // profile has already run by the time it does (see ps_encoded_init).
+            cmd.args([
+                "-NoLogo",
+                "-NoExit",
+                "-EncodedCommand",
+                &ps_encoded_init(cfg),
+            ]);
+        }
+        ShellKind::Cmd => {
+            cmd.env("PROMPT", cmd_prompt(cfg));
+            let init = unique_path("splitview-init").with_extension("cmd");
+            fs::write(&init, cmd_init(cfg))?;
+            cmd.args(["/K", &init.to_string_lossy()]);
         }
         // fish / others: best-effort. Don't mangle the user's prompt; just run
         // interactively and let them keep their own (CLAUDE.md §8). Aliases and
@@ -787,6 +1040,88 @@ mod tests {
         cmd.env("LANG", "de_DE.ISO-8859-1");
         ensure_utf8_locale(&mut cmd);
         assert!(cmd.get_env("LC_CTYPE").is_none());
+    }
+
+    fn cfg_for(program: &str) -> ShellConfig {
+        ShellConfig {
+            program: Some(program.into()),
+            cwd: None,
+            prompt: "{user} @ {cwd} $ ".into(),
+            style: PromptStyle::Parrot,
+            aliases: vec![Alias {
+                name: "gs".into(),
+                command: "git status".into(),
+            }],
+            prompt_info: PromptInfo::default(),
+            banner: "hi\\e[0m".into(),
+        }
+    }
+
+    #[test]
+    fn detects_windows_shell_kinds() {
+        assert_eq!(kind_of("powershell.exe"), ShellKind::PowerShell);
+        assert_eq!(
+            kind_of(r"C:\Program Files\PowerShell\7\pwsh.exe"),
+            ShellKind::PowerShell
+        );
+        assert_eq!(kind_of(r"C:\Windows\System32\cmd.exe"), ShellKind::Cmd);
+    }
+
+    #[test]
+    fn powershell_init_is_an_encoded_prompt_with_aliases() {
+        use base64::Engine;
+        let encoded = ps_encoded_init(&cfg_for("powershell.exe"));
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("valid base64");
+        let units: Vec<u16> = bytes
+            .chunks(2)
+            .map(|c| u16::from_le_bytes([c[0], c.get(1).copied().unwrap_or(0)]))
+            .collect();
+        let script = String::from_utf16(&units).expect("valid UTF-16");
+        assert!(script.contains("function global:prompt"));
+        assert!(script.contains("__sv_osc7"));
+        assert!(script.contains("Remove-Item -Path 'Alias:gs'"));
+        assert!(script.contains("function global:gs { git status @args }"));
+        assert!(script.contains("function global:splitview"));
+        assert!(script.contains("└──╼"));
+
+        let cmd = build_command(&cfg_for("powershell.exe")).expect("build command");
+        let argv: Vec<String> = cmd
+            .get_argv()
+            .iter()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert!(argv.iter().any(|a| a == "-NoExit"));
+        assert!(argv.iter().any(|a| a == "-EncodedCommand"));
+    }
+
+    #[test]
+    fn plain_powershell_prompt_quotes_the_template() {
+        let s = plain_ps_setup("{user}'s {cwd} > ");
+        assert!(s.contains("'{user}''s {cwd} > '"));
+        assert!(s.contains(".Replace('{user}'"));
+    }
+
+    #[test]
+    fn cmd_prompt_reports_cwd_and_escapes_dollars() {
+        let mut cfg = cfg_for("cmd.exe");
+        let p = cmd_prompt(&cfg);
+        assert!(p.starts_with("$E]7;file://localhost/$P$E\\"));
+        assert!(p.contains("$_")); // two lines
+        cfg.style = PromptStyle::Plain;
+        cfg.prompt = "{cwd} $ ".into();
+        assert_eq!(cmd_prompt(&cfg), "$E]7;file://localhost/$P$E\\$P $$ ");
+    }
+
+    #[test]
+    fn cmd_init_defines_doskey_aliases_and_turns_echo_back_on() {
+        let s = cmd_init(&cfg_for("cmd.exe"));
+        assert!(s.starts_with("@echo off\r\n"));
+        assert!(s.contains("doskey gs=git status $*\r\n"));
+        assert!(s.contains("echo(hi\u{1b}[0m\r\n"));
+        assert!(s.ends_with("@echo on\r\n"));
+        assert_eq!(batch_echo_escape("a&b|c>d%e"), "a^&b^|c^>d%%e");
     }
 
     #[test]

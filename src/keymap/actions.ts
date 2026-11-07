@@ -50,6 +50,11 @@ export interface AppActions {
   zoomReset(): void;
   /** Open the Settings window. */
   openSettings(): void;
+  /**
+   * Open the shell-profile picker: Enter opens a pane running the chosen shell
+   * beside the focused one, `d` makes it the default for new panes.
+   */
+  pickShell(): void;
 }
 
 /** Human-readable label + grouping for each action, shown in Settings. */
@@ -88,6 +93,7 @@ export const ACTION_INFO: Record<string, { label: string; category: string }> = 
   new_window: { label: "Open a new window", category: "App" },
   toggle_sidebar: { label: "Toggle file sidebar", category: "App" },
   toggle_editor: { label: "Toggle editor panel", category: "App" },
+  pick_shell: { label: "Pick a shell (open a pane / set default)", category: "App" },
 };
 
 export type ActionHandler = (a: AppActions) => void;
@@ -128,6 +134,7 @@ export const actionHandlers: Record<string, ActionHandler> = {
   zoom_out: (a) => a.zoomOut(),
   zoom_reset: (a) => a.zoomReset(),
   open_settings: (a) => a.openSettings(),
+  pick_shell: (a) => a.pickShell(),
 };
 
 /** Dispatch an action by name; unknown names are ignored. */

@@ -45,12 +45,13 @@ import {
 } from "./model";
 
 export interface FileTreeDeps {
-  /** Insert a path at the focused terminal's prompt (shell-quoted, no newline). */
-  onInsertPath(shellPath: string): void;
+  /** Insert a (native) path at the focused terminal's prompt; the controller
+   * converts and quotes it for that pane's shell. No newline. */
+  onInsertPath(nativePath: string): void;
   /** Open a file in the editor panel. */
   onOpenFile(path: string): void;
-  /** Run `cd <dir>` in the focused terminal. */
-  onChangeDir(shellPath: string): void;
+  /** Run `cd <dir>` (a native path) in the focused terminal. */
+  onChangeDir(nativeDir: string): void;
   /** Hand focus back to the terminal (Escape, or after acting on an entry). */
   onLeave(): void;
   /** The sidebar's width changed, so the pane area shrank/grew: the terminals
@@ -610,14 +611,14 @@ export class FileTree {
   /** Enter: toggle a folder, or insert a file's path at the prompt. */
   private activate(row: Row): void {
     if (row.entry.isDir) this.setOpen(row.entry, !row.open);
-    else this.deps.onInsertPath(toShellPath(row.entry.path));
+    else this.deps.onInsertPath(row.entry.path);
   }
 
   /** `c`: cd the terminal into this directory (or a file's directory). The tree
    * follows on its own once the shell reports the new cwd. */
   private changeDir(entry: DirEntryInfo): void {
     const dir = entry.isDir ? entry.path : dirNameOf(entry.path, this.view?.root ?? "");
-    this.deps.onChangeDir(toShellPath(dir));
+    this.deps.onChangeDir(dir);
   }
 
   /** `u`: re-root one directory up. */

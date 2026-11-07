@@ -44,7 +44,8 @@ import { destroyCurrentWindow, openNewWindow } from "./ipc/windows";
 import { renderLayout } from "./layout/render";
 import { Pane } from "./terminal/Pane";
 import { DetachedApp } from "./terminal/DetachedApp";
-import { shellQuote } from "./shellQuote";
+import { cdCommandFor, quotePathFor } from "./shellQuote";
+import { ShellPicker, resolveDefault } from "./profiles/ShellPicker";
 import { baseName, resolvePath } from "./paths";
 import { FileTree } from "./sidebar/FileTree";
 import { EditorPanel } from "./editor/EditorPanel";
@@ -74,7 +75,13 @@ import {
 import { SettingsWindow } from "./settings/SettingsWindow";
 import { RemoteBridge } from "./remote/RemoteBridge";
 import { buildRoster } from "./remote/roster";
-import { remoteEnable, type RemotePaneInfo } from "./ipc/commands";
+import {
+  listShellProfiles,
+  remoteEnable,
+  type RemotePaneInfo,
+  type ShellFamily,
+  type ShellProfile,
+} from "./ipc/commands";
 
 /** Font-size bounds for the zoom-in/out actions, in px. */
 const FONT_MIN = 6;
@@ -116,6 +123,9 @@ class App implements AppActions {
   /** True once this window is tearing down, so the close handler's second pass
    * (after the backgrounded shells are killed) lets it actually close. */
   private closing = false;
+  /** Installed shells, as last detected (start-up and every picker open). */
+  private profiles: ShellProfile[] = [];
+  private readonly shellPicker = new ShellPicker();
 
   constructor(
     root: HTMLElement,
@@ -135,8 +145,10 @@ class App implements AppActions {
     this.fileTree = new FileTree({
       // A path is inserted without a newline so the user can edit or prepend a
       // command; `cd` is sent with one, because there is nothing to edit.
-      onInsertPath: (path) => this.insertIntoTerminal(shellQuote(path)),
-      onChangeDir: (path) => this.insertIntoTerminal(`cd ${shellQuote(path)}\r`),
+      onInsertPath: (path) =>
+        this.insertIntoTerminal(quotePathFor(this.focusedFamily(), path)),
+      onChangeDir: (path) =>
+        this.insertIntoTerminal(cdCommandFor(this.focusedFamily(), path)),
       onOpenFile: (path) => void this.editor.openFile(path),
       onLeave: () => this.focusedPane()?.focus(),
       // Resizing the sidebar resizes the pane area with it.
@@ -158,7 +170,7 @@ class App implements AppActions {
       panes: () => this.remotePanes(),
       focusedPaneId: () => this.layout.focused,
       snapshot: (id) => this.remoteSnapshot(id),
-      createPane: (cwd) => this.splitInto("right", cwd),
+      createPane: (cwd) => this.splitInto("right", cwd, undefined, false),
       closePane: (id) => this.closePaneConfirmed(id),
       onIndicatorClick: () => this.settingsWindow.open("remote"),
       onPromptClosed: () => this.focusedPane()?.focus(),
@@ -183,6 +195,7 @@ class App implements AppActions {
         globalBindings: DEFAULT_KEYMAP.globalBindings ?? {},
       },
       actionInfo: ACTION_INFO,
+      listProfiles: () => listShellProfiles(),
     });
   }
 
@@ -243,7 +256,8 @@ class App implements AppActions {
       .then(() => this.autoEnableRemote())
       .catch(() => {});
 
-    const first = await this.newPane(this.initialCwd);
+    const first = await this.firstPane();
+    if (!first) return;
     this.layout = singleLayout(first.id ?? this.placeholderId());
     this.render();
     first.focus();
@@ -284,9 +298,93 @@ class App implements AppActions {
     return `pane-local-${this.nextSeq++}`;
   }
 
-  private async newPane(cwd?: string): Promise<Pane> {
+  /**
+   * Start this window's first shell, asking which one when that is not settled.
+   *
+   * On a fresh install no default has been chosen, so the picker opens before
+   * anything is spawned and the pick is saved. It opens again — with the reason
+   * — whenever the shell fails to start, rather than leaving an empty, black
+   * window: that is what a fresh Windows machine used to get, because the app
+   * went looking for a `bash` that was not on `PATH`. A `shell` set in the config
+   * file outranks the saved choice, as it always has.
+   *
+   * Resolves to `null` only when there is nothing to offer at all; the window
+   * then says so instead of staying blank.
+   */
+  private async firstPane(): Promise<Pane | null> {
+    this.profiles = await listShellProfiles().catch(() => []);
+    let message: string | undefined;
+    let ask = false;
+    for (;;) {
+      let profile: ShellProfile | null = null;
+      if (!this.config.shell || ask) {
+        profile = ask
+          ? null
+          : resolveDefault(this.profiles, this.settings.shell.defaultProfile);
+        if (!profile && this.profiles.length === 1) {
+          // Nothing to choose between: take it, and don't ask again.
+          profile = this.profiles[0];
+          this.setDefaultProfile(profile.id);
+        } else if (!profile && this.profiles.length > 1) {
+          const choice = await this.shellPicker.open({
+            mode: "first-run",
+            profiles: this.profiles,
+            defaultId: this.settings.shell.defaultProfile,
+            message,
+          });
+          profile = choice?.profile ?? this.profiles[0];
+          if (choice?.action === "default") this.setDefaultProfile(profile.id);
+        }
+      }
+      try {
+        return await this.newPane(this.initialCwd, profile?.program);
+      } catch (err) {
+        const name = profile?.name ?? this.config.shell ?? "the shell";
+        message = `Couldn't start ${name}: ${errorText(err)}\nPick another shell.`;
+        if (this.profiles.length < 2) {
+          this.showStartupError(message);
+          return null;
+        }
+        ask = true;
+      }
+    }
+  }
+
+  /** Last resort when no shell can be started: say so on the window itself. */
+  private showStartupError(message: string): void {
+    const el = document.createElement("div");
+    el.className = "startup-error";
+    const hint = navigator.userAgent.includes("Windows")
+      ? "\n\nInstall Git for Windows (git-scm.com) for Git Bash, then reopen SplitView."
+      : "\n\nInstall a shell such as bash, or set `shell` in the config file.";
+    el.textContent = message.replace(/\nPick another shell\.$/, "") + hint;
+    this.container.replaceChildren(el);
+  }
+
+  /** The program new panes run: the config's `shell`, else the saved default
+   * profile, else nothing (the backend picks the best installed shell). */
+  private defaultShell(): string | undefined {
+    return (
+      this.config.shell ??
+      resolveDefault(this.profiles, this.settings.shell.defaultProfile)?.program
+    );
+  }
+
+  /** Save `id` as the default shell profile for new panes. */
+  private setDefaultProfile(id: string): void {
+    this.onSettingsChanged({ ...this.settings, shell: { defaultProfile: id } });
+  }
+
+  /** Which syntax the focused pane's shell speaks (POSIX if there is none). */
+  private focusedFamily(): ShellFamily {
+    return this.focusedPane()?.family ?? "posix";
+  }
+
+  /** Spawn a pane in `cwd`, running `shell` (default: `defaultShell()`). */
+  private async newPane(cwd?: string, shell?: string): Promise<Pane> {
     const pane = await Pane.create(this.effectiveConfig(), {
       cwd,
+      shell: shell ?? this.defaultShell(),
       aliases: this.settings.aliases,
       banner: this.settings.banner,
       promptInfo: this.settings.promptInfo,
@@ -350,6 +448,15 @@ class App implements AppActions {
         ev.preventDefault();
         ev.stopPropagation();
       }
+      return;
+    }
+
+    // The shell picker is modal, like the backgrounded-panes picker below; on
+    // first launch it is the only thing on screen.
+    if (this.shellPicker.isOpen) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.shellPicker.handleKey(ev);
       return;
     }
 
@@ -455,15 +562,52 @@ class App implements AppActions {
    * directory). The remote's `create_pane` lands here with the directory the
    * phone was looking at, which is the split it would have made itself.
    */
-  private splitInto(dir: "down" | "right", cwd?: string): void {
+  private splitInto(
+    dir: "down" | "right",
+    cwd?: string,
+    shell?: string,
+    /** False for a remote client's request: no modal on a laptop nobody may be
+     * sitting at (`docs/remote-control-desktop.md` §5.4). */
+    askOnFailure = true,
+  ): void {
     const where = cwd ?? this.focusedPane()?.cwd ?? undefined;
-    void this.newPane(where).then((pane) => {
-      const id = pane.id;
-      if (!id) return;
-      this.commit(
-        this.layout.root ? splitFocused(this.layout, dir, id) : singleLayout(id),
-      );
-    });
+    void this.newPane(where, shell)
+      .then((pane) => {
+        const id = pane.id;
+        if (!id) return;
+        this.commit(
+          this.layout.root ? splitFocused(this.layout, dir, id) : singleLayout(id),
+        );
+      })
+      .catch((err: unknown) => {
+        // The shell would not start (uninstalled since it was picked?): offer
+        // the others instead of failing silently.
+        if (askOnFailure) this.pickShell(`Couldn't start that shell: ${errorText(err)}`);
+      });
+  }
+
+  /**
+   * `<prefix> p`: the shell picker. Enter opens a pane running the chosen shell
+   * beside the focused one; `d` makes it the default for new panes. Shells are
+   * re-detected on every open, so one installed while SplitView is running
+   * shows up without a restart.
+   */
+  pickShell(message?: string): void {
+    void (async () => {
+      this.profiles = await listShellProfiles().catch(() => this.profiles);
+      const choice = await this.shellPicker.open({
+        mode: "open",
+        profiles: this.profiles,
+        defaultId: this.settings.shell.defaultProfile,
+        message,
+      });
+      if (choice?.action === "open") {
+        this.splitInto("right", undefined, choice.profile.program);
+        return;
+      }
+      if (choice?.action === "default") this.setDefaultProfile(choice.profile.id);
+      this.focusedPane()?.focus();
+    })();
   }
 
   focus(dir: Direction): void {
@@ -860,7 +1004,7 @@ class App implements AppActions {
   openFileDialog(): void {
     void pickFile()
       .then((path) => {
-        if (path) this.insertIntoTerminal(shellQuote(path));
+        if (path) this.insertIntoTerminal(quotePathFor(this.focusedFamily(), path));
       })
       .catch(() => {
         // Dialog failed/unavailable; nothing to insert.
@@ -899,6 +1043,13 @@ class App implements AppActions {
     this.editor.setFontSize(next);
     for (const pane of this.panes.values()) pane.setFontSize(next);
   }
+}
+
+/** A readable reason from a rejected `invoke` (the backend sends a string). */
+function errorText(err: unknown): string {
+  if (typeof err === "string") return err;
+  if (err instanceof Error) return err.message;
+  return String(err);
 }
 
 async function bootstrap(): Promise<void> {

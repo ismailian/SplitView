@@ -54,12 +54,22 @@ export interface RemoteSettings {
   allowResize: boolean;
 }
 
+/**
+ * Which shell new panes run. `defaultProfile` is a `ShellProfile.id` from
+ * `list_shell_profiles`; `null` means the user has not chosen yet, which is what
+ * makes the first launch ask (a profile that was uninstalled since asks again).
+ */
+export interface ShellSettings {
+  defaultProfile: string | null;
+}
+
 export interface Settings {
   display: DisplaySettings;
   promptInfo: PromptInfo;
   aliases: Alias[];
   banner: string;
   remote: RemoteSettings;
+  shell: ShellSettings;
 }
 
 /** The subset of `RemoteSettings` the backend needs to start the server. */
@@ -109,6 +119,7 @@ export function defaultSettings(): Settings {
       port: DEFAULT_REMOTE_PORT,
       allowResize: true,
     },
+    shell: { defaultProfile: null },
   };
 }
 
@@ -225,6 +236,13 @@ export function loadSettings(): Settings {
       aliases: parsed.aliases ? sanitizeAliases(parsed.aliases) : def.aliases,
       banner: typeof parsed.banner === "string" ? parsed.banner : def.banner,
       remote: sanitizeRemote(def.remote, parsed.remote),
+      shell: {
+        defaultProfile:
+          typeof parsed.shell?.defaultProfile === "string" &&
+          parsed.shell.defaultProfile !== ""
+            ? parsed.shell.defaultProfile
+            : null,
+      },
     };
   } catch {
     return def;

@@ -141,6 +141,7 @@ export const DEFAULT_KEYMAP: KeymapConfig = {
     "S-e": "toggle_editor",
     r: "reload_config",
     ",": "open_settings",
+    p: "pick_shell",
   },
   // Global chords active *without* the prefix. These are the explicit, opt-in
   // exception to "never swallow keys outside prefix mode" (CLAUDE.md §9): each

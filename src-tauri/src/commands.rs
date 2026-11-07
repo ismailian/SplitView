@@ -13,6 +13,7 @@ use tauri::{AppHandle, State};
 
 use crate::error::{Error, Result};
 use crate::files::{self, FileStamp, TextFile};
+use crate::profiles::{self, ShellFamily, ShellProfile};
 use crate::pty;
 use crate::remote::{
     DeviceInfo, RemoteConfig, RemoteState, RemoteStatus, SnapshotReply, WindowPanes,
@@ -78,7 +79,7 @@ pub fn spawn_pty(
     state: State<'_, AppState>,
     on_output: Channel<Vec<u8>>,
     opts: SpawnOpts,
-) -> Result<PaneId> {
+) -> Result<SpawnedPane> {
     let cols = opts.cols.unwrap_or(80);
     let rows = opts.rows.unwrap_or(24);
     let aliases = opts
@@ -118,12 +119,32 @@ pub fn spawn_pty(
     // `pty-exit` event it emits when the shell exits.
     let id = next_pane_id();
     let handle = pty::spawn(cols, rows, &shell_cfg, on_output, app, id.clone())?;
+    let family = handle.family;
     state
         .panes
         .lock()
         .map_err(|_| Error::Poisoned)?
         .insert(id.clone(), handle);
-    Ok(id)
+    Ok(SpawnedPane {
+        pane_id: id,
+        family,
+    })
+}
+
+/// What `spawn_pty` hands back: the new pane's id and which shell syntax it
+/// runs, so the frontend quotes paths it types into it correctly.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnedPane {
+    pub pane_id: PaneId,
+    pub family: ShellFamily,
+}
+
+/// The shells installed on this machine, best default first (`profiles.rs`).
+/// Feeds the first-run picker, `<prefix> p` and Settings → Shell.
+#[tauri::command]
+pub fn list_shell_profiles() -> Vec<ShellProfile> {
+    profiles::detect()
 }
 
 /// Write keystrokes/bytes to a pane's PTY master. The lock is held only briefly.
@@ -192,13 +213,13 @@ pub fn attach_pty(
     state: State<'_, AppState>,
     pane_id: PaneId,
     on_output: Channel<Vec<u8>>,
-) -> Result<()> {
+) -> Result<ShellFamily> {
     let panes = state.panes.lock().map_err(|_| Error::Poisoned)?;
     let handle = panes
         .get(&pane_id)
         .ok_or_else(|| Error::PaneNotFound(pane_id.clone()))?;
     handle.output.set_local(on_output)?;
-    Ok(())
+    Ok(handle.family)
 }
 
 /// Stash a pane's serialized xterm.js buffer so the window it is moving to can

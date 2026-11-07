@@ -13,7 +13,7 @@
 
 import type { Settings, ColorKey } from "./settings";
 import { PRESETS, MAX_DIR_SEGMENTS, clampDirSegments } from "./settings";
-import type { PromptInfo, PromptToggle } from "../ipc/commands";
+import type { PromptInfo, PromptToggle, ShellProfile } from "../ipc/commands";
 import { promptDir } from "../paths";
 import { RemoteSection } from "./RemoteSection";
 
@@ -32,6 +32,8 @@ export interface SettingsWindowDeps {
   keymap: KeymapView;
   /** action name -> { label, category }. */
   actionInfo: Record<string, { label: string; category: string }>;
+  /** The installed shells, for the Shell section (`list_shell_profiles`). */
+  listProfiles(): Promise<ShellProfile[]>;
 }
 
 export type Section =
@@ -40,6 +42,7 @@ export type Section =
   | "display"
   | "info"
   | "banner"
+  | "shell"
   | "remote";
 
 const SECTION_META: { id: Section; label: string }[] = [
@@ -48,6 +51,7 @@ const SECTION_META: { id: Section; label: string }[] = [
   { id: "display", label: "🎨  Display" },
   { id: "info", label: "ⓘ   Terminal Info" },
   { id: "banner", label: "▤   Banner" },
+  { id: "shell", label: "$_  Shell" },
   { id: "remote", label: "⇄   Remote" },
 ];
 
@@ -193,6 +197,8 @@ export class SettingsWindow {
         return this.buildInfo();
       case "banner":
         return this.buildBanner();
+      case "shell":
+        return this.buildShell();
       case "remote":
         return this.buildRemote();
     }
@@ -206,6 +212,56 @@ export class SettingsWindow {
     });
     this.remoteSection = section;
     return section.el;
+  }
+
+  // --- Shell -------------------------------------------------------------
+
+  /** The default shell profile. Detection is async, so the list fills in once
+   * the backend answers; the section is usable (if empty) before that. */
+  private buildShell(): HTMLElement {
+    const section = h("div", { class: "sv-section" });
+    section.append(
+      h("p", {
+        class: "sv-note",
+        textContent:
+          "The shell new panes start with. Applies to newly opened terminals. To open one pane with a different shell, press the prefix then p.",
+      }),
+    );
+    const list = h("div", { class: "sv-shell-list" });
+    list.append(h("p", { class: "sv-empty", textContent: "Looking for shells…" }));
+    section.append(list);
+
+    const render = (profiles: ShellProfile[]): void => {
+      list.replaceChildren();
+      if (profiles.length === 0) {
+        list.append(h("p", { class: "sv-empty", textContent: "No shells found." }));
+        return;
+      }
+      for (const profile of profiles) {
+        const input = h("input", {
+          type: "radio",
+          name: "sv-shell-default",
+          checked: profile.id === this.current.shell.defaultProfile,
+        });
+        input.onchange = () => {
+          if (!input.checked) return;
+          this.current.shell = { defaultProfile: profile.id };
+          this.emit();
+        };
+        const text = h(
+          "div",
+          { class: "sv-toggle-text" },
+          h("span", { class: "sv-toggle-label", textContent: profile.name }),
+          h("span", { class: "sv-toggle-desc", textContent: profile.program }),
+        );
+        list.append(h("label", { class: "sv-toggle-row" }, text, input));
+      }
+    };
+    void this.deps
+      .listProfiles()
+      .then(render)
+      .catch(() => render([]));
+    return section;
   }
 
   // --- Keybindings (read-only) -------------------------------------------

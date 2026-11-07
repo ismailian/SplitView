@@ -53,3 +53,32 @@ describe("clampDirSegments", () => {
     expect(clampDirSegments(2.9)).toBe(2);
   });
 });
+
+describe("default shell profile", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const storing = (shell: unknown) =>
+    vi.stubGlobal("localStorage", {
+      getItem: () => JSON.stringify({ shell }),
+    });
+
+  it("is unchosen on a fresh install, so the first launch asks", () => {
+    expect(defaultSettings().shell.defaultProfile).toBeNull();
+    vi.stubGlobal("localStorage", { getItem: () => null });
+    expect(loadSettings().shell.defaultProfile).toBeNull();
+  });
+
+  it("keeps a saved choice", () => {
+    storing({ defaultProfile: "git-bash" });
+    expect(loadSettings().shell.defaultProfile).toBe("git-bash");
+  });
+
+  it("reads a missing or corrupt value as unchosen", () => {
+    storing(undefined);
+    expect(loadSettings().shell.defaultProfile).toBeNull();
+    storing({ defaultProfile: 7 });
+    expect(loadSettings().shell.defaultProfile).toBeNull();
+    storing({ defaultProfile: "" });
+    expect(loadSettings().shell.defaultProfile).toBeNull();
+  });
+});

@@ -27,6 +27,35 @@ export function toShellPath(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
+/**
+ * Parse an OSC 7 payload (`file://host/path`) into the bare path. The host is
+ * discarded; the path is percent-decoded best-effort. Returns null if it isn't
+ * a `file://` URL.
+ *
+ * On Windows the path arrives in one of two forms, depending on the shell:
+ * bash reports its msys `$PWD` (`/c/Users/x`), which the backend converts when
+ * spawning the next pane; PowerShell and cmd report a native path after the
+ * host's slash (`/C:/Users/x`, `/C:\Users\x`), which is returned as the native
+ * `C:\Users\x` so the sidebar and the next split can use it directly.
+ */
+export function parseOsc7(data: string): string | null {
+  if (!data.startsWith("file://")) return null;
+  const rest = data.slice("file://".length);
+  const slash = rest.indexOf("/");
+  if (slash < 0) return null;
+  let path = rest.slice(slash);
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // Malformed escape (a literal `%` in a directory name); use the raw path.
+  }
+  if (/^\/[A-Za-z]:([\\/]|$)/.test(path)) {
+    const native = path.slice(1).replace(/\//g, "\\");
+    return native.length === 2 ? `${native}\\` : native;
+  }
+  return path;
+}
+
 /** The last segment of a path (either separator), or the path itself for a root. */
 export function baseName(p: string): string {
   const parts = p.split(/[\\/]+/).filter((s) => s !== "");
