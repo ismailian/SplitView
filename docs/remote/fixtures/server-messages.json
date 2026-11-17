@@ -1,5 +1,5 @@
 {
-  "_comment": "Golden wire-protocol fixtures for SplitView remote control. docs/remote-control-desktop.md §6 is the normative spec; these vectors are asserted by the Rust tests in src-tauri/src/remote/protocol.rs and are copied verbatim into the Flutter client's codec tests so the two implementations cannot drift.",
+  "_comment": "Golden wire-protocol fixtures for SplitView remote control. docs/remote-control-desktop.md §6 is the normative spec; these vectors are asserted by the Rust tests in crates/app/src/remote/protocol.rs and are copied verbatim into the Flutter client's codec tests so the two implementations cannot drift.",
   "proto": 1,
   "messages": [
     {

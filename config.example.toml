@@ -1,42 +1,47 @@
 # SplitView configuration (example).
-# Copy to the platform config dir, e.g. ~/.config/splitview/config.toml
+# Copy to the platform config dir as config.toml:
+#   Windows  %APPDATA%\splitview\config.toml
+#   Linux    ~/.config/splitview/config.toml
+#   macOS    ~/Library/Application Support/splitview/config.toml
+# Reload without restarting: <prefix> r.
+#
+# Colours, font size, aliases, prompt segments, the banner and the default shell
+# are set in the Settings window (<prefix> ,) and saved by the app itself in
+# settings.json next to this file.
 
 # Prompt style:
-#   "parrot" (default) — the iconic ParrotOS two-line prompt:
+#   "parrot" (default) — the ParrotOS two-line prompt:
 #                          ┌─[user@host]─[~]
-#                          └──╼ $     (red frame, green commands)
+#                          └──╼ $
 #   "plain"            — use the `prompt` template below instead.
 promptStyle = "parrot"
 
-# The shell prompt template, used only when promptStyle = "plain".
+# The prompt template, used only when promptStyle = "plain".
 # {user} and {cwd} are substituted per shell.
 prompt = "{user} @ {cwd} $ "
 
 # Prefix chord (tmux-style). Press this, then a command key.
 prefix = "C-a"
 
-# Optional shell override. Defaults to $SHELL, then bash -> zsh -> sh.
+# Optional shell override. It outranks the default chosen in Settings → Shell.
 # shell = "/bin/zsh"
 
-# Terminal font.
-fontFamily = "ui-monospace, Menlo, Consolas, monospace"
+# Terminal font: JetBrains Mono is bundled. Point this at a .ttf/.otf to use
+# another monospace font.
+# fontFile = "C:/Windows/Fonts/CascadiaMono.ttf"
+
+# Starting font size (Ctrl+= / Ctrl+- / Ctrl+0 zoom from here).
 fontSize = 14
 
 # Ratio change per resize keystroke.
 resizeStep = 0.03
 
-# Keybinding overrides: chord -> action name. Chords use C-/S-/A-/M- prefixes.
-# These override the *after-prefix* bindings. Global (no-prefix) shortcuts also
-# exist out of the box:
-#   Win+O (or Ctrl+Shift+O) -> open_file_dialog : insert a picked file's path
-#   Ctrl+=  / Ctrl+-  / Ctrl+0 -> zoom the terminal font in / out / reset
-#   <prefix> z -> toggle_zoom : maximize the focused pane, then restore
-#   <prefix> E -> toggle_editor : the code editor on the right. From a terminal:
-#                 splitview edit <file>
-#   <prefix> , -> open_settings : open the Settings window. You can also open it
-#                 from any terminal by running:  splitview settings
-#
-# Settings edited in that window (display colours/fonts, aliases, prompt-info
-# toggles, and the banner) are saved by the app itself, separate from this file.
+# Keybinding overrides: chord -> action name. Chords use C-/A-/S- prefixes and
+# key names like h, -, \, arrowleft. These override the *after-prefix* bindings.
+# Global shortcuts (no prefix) that always work:
+#   Ctrl+Shift+P            command palette (every action, shell and theme)
+#   Ctrl+Shift+O            insert a file path picked from a dialog
+#   Ctrl+= / Ctrl+- / Ctrl+0  terminal font size
+# From any pane's shell:  splitview edit <file>  ·  splitview settings
 [keybindings]
 # "C-x" = "close_pane"

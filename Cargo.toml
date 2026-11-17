@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/term", "crates/app"]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.90"
+
+[workspace.dependencies]
+sv-core = { path = "crates/core", package = "splitview-core" }
+sv-term = { path = "crates/term", package = "splitview-term" }
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "x11", "wayland", "accesskit"] }
+egui = "0.36"
+egui-phosphor = { version = "0.14", default-features = false, features = ["regular"] }
+alacritty_terminal = "0.26"
+parking_lot = "0.12"   # must match alacritty_terminal (its FairMutex guards are parking_lot 0.12)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+thiserror = "2"
+dirs = "6"
+
+# ---- build profiles (fast, small builds) ----
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+opt-level = 2        # egui is slow unoptimized; our own crates stay at 0
+
+[profile.dev.build-override]
+debug = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

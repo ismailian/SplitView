@@ -10,6 +10,16 @@
 > guarantee), §6.2 (subscription limits) and §14 (the open questions, now
 > answered). Golden protocol vectors live in `docs/remote/fixtures/`.
 >
+> **Since 0.3 (egui):** the wire protocol, pairing, auth and TLS are unchanged,
+> but the host side moved. Read the Tauri-era paths below as:
+> `src-tauri/src/remote/*` → `crates/app/src/remote/*`; `state.rs`/`pty.rs`/
+> `commands.rs` → `crates/app/src/hub.rs`; "the webview" / `src/main.ts` /
+> `RemoteBridge.ts` → the egui app (`crates/app/src/app.rs`), which publishes the
+> roster itself; Tauri events → `UiEvent::Remote`. Snapshots are no longer asked
+> of a window: the emulator lives in the backend, so `request_snapshot` reads
+> `Terminal::snapshot_ansi()` directly (same message, same guarantee). Tauri
+> capabilities (§7.4) no longer exist — there is no IPC surface to grant.
+>
 > **Not verified in a running GUI.** Everything below is covered by unit and
 > integration tests (including a real loopback TLS handshake with certificate
 > pinning), but no phone has ever connected to this server — there is no client
