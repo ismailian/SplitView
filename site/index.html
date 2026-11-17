@@ -3,153 +3,325 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SplitView: a keyboard-driven terminal</title>
-  <meta name="description" content="SplitView is a keyboard-driven terminal for the desktop, with tmux-style split panes, real shells, a file tree and a code editor. Version 0.2.0 for Windows.">
-  <meta property="og:title" content="SplitView">
-  <meta property="og:description" content="A keyboard-driven terminal with tmux-style split panes in a native window.">
+  <title>SplitView: a keyboard-driven terminal with split panes</title>
+  <meta name="description" content="SplitView is a native, keyboard-driven terminal for Windows with tmux-style split panes, a file explorer that follows your shell, a built-in editor and a command palette. Free, 5.7 MB, version 0.3.0.">
+  <meta property="og:title" content="SplitView: split, focus, zoom. Never reach for the mouse.">
+  <meta property="og:description" content="A native terminal with tmux-style panes, a file explorer and an editor beside them.">
   <meta property="og:type" content="website">
-  <meta name="theme-color" content="#d9e3dc">
+  <meta property="og:image" content="/assets/img/hero.webp">
+  <meta name="theme-color" content="#0c0f13">
+  <meta name="color-scheme" content="dark">
   <link rel="icon" type="image/png" href="/assets/img/icon.png">
-  <link rel="preload" href="/assets/fonts/big-shoulders-display-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/assets/fonts/hanken-grotesk-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/assets/site.css">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<header class="bar">
-  <a class="mark" href="/" aria-label="SplitView home"><span>Split</span><span>View</span></a>
-  <nav aria-label="Main">
-    <a href="#keys">Keys</a>
-    <a href="#download">Download</a>
-  </nav>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="SplitView home"><img src="/assets/img/icon.png" alt="" width="26" height="26">SplitView</a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="#demo">Demo</a>
+      <a href="#features">Features</a>
+      <a href="#keys">Keys</a>
+    </nav>
+    <a class="btn btn-primary btn-sm" href="#download">
+      <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+      Download
+    </a>
+  </div>
 </header>
 
 <main id="main">
-  <section class="hero">
-    <div class="hero-copy">
-      <h1>A terminal that splits in two keystrokes</h1>
-      <p class="lede">SplitView gives you tmux-style panes in a native desktop window, with real shells, a file tree and a code editor beside them. Everything works from the keyboard.</p>
-      <div class="actions">
-        <a class="button" href="#download">Download for Windows</a>
-        <span class="note">Version 0.2.0, free</span>
+  <!-- Hero ------------------------------------------------------------- -->
+  <div class="hero">
+    <div class="wrap">
+      <div class="hero-copy">
+        <span class="eyebrow"><span class="dot" aria-hidden="true"></span>v0.3.0 · now a native app · Windows</span>
+        <h1>Split, focus, zoom.<br><span class="accent">Never reach for the mouse.</span></h1>
+        <p class="lede">SplitView is a terminal with tmux-style panes in a native window, with a file explorer that follows your shell and an editor beside it. Everything is one keystroke away.</p>
+        <div class="cta">
+          <a class="btn btn-primary" href="#download">
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Download for Windows
+          </a>
+          <a class="btn btn-ghost" href="#demo">
+            Try the keys
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+          </a>
+        </div>
+        <p class="cta-meta"><span>Free</span><span>5.7 MB</span><span>No admin rights</span><span>Windows 10 and 11, x64</span></p>
       </div>
-    </div>
-    <div class="play" aria-label="Interactive demo of split panes">
-      <div class="play-stage" id="stage" tabindex="0" role="application" aria-label="Demo panes. Press Control A, then v to split."></div>
-      <div class="play-keys">
-        <div class="play-status" id="play-status" role="status">Click here, then press Ctrl+A and v.</div>
-        <button type="button" id="prefix" data-key="prefix" aria-pressed="false">Ctrl+A</button>
-        <button type="button" data-key="v" aria-label="Split side by side">v split</button>
-        <button type="button" data-key="-" aria-label="Split stacked">- stack</button>
-        <button type="button" data-key="o" aria-label="Focus next pane">o next</button>
-        <button type="button" data-key="z" aria-label="Toggle zoom">z zoom</button>
-        <button type="button" data-key="x" aria-label="Close pane">x close</button>
-      </div>
-    </div>
-  </section>
 
-  <div class="shot-wide">
-    <img src="/assets/img/hero.webp" width="2000" height="1250" alt="SplitView with three panes: vim on the left, a git commit summary at top right and a passing test run at bottom right.">
+      <div class="window reveal">
+        <div class="window-bar" aria-hidden="true"><i></i><i></i><i></i><span>SplitView</span></div>
+        <img src="/assets/img/hero.webp" width="2000" height="1150" alt="SplitView with the Explorer on the left, three terminal panes running git log, ls and cargo test, and the editor on the right showing a Rust file.">
+      </div>
+
+      <div class="stats reveal" role="list">
+        <div class="stat" role="listitem"><b>0 fps</b><span>drawn while nothing changes</span></div>
+        <div class="stat" role="listitem"><b>~40 MB</b><span>of memory with three shells</span></div>
+        <div class="stat" role="listitem"><b>1 exe</b><span>native Rust, no webview</span></div>
+        <div class="stat" role="listitem"><b>Real PTYs</b><span>Git Bash, PowerShell, cmd</span></div>
+      </div>
+    </div>
   </div>
 
-  <section class="feature r-4-8">
-    <div class="feature-copy">
-      <h2>Your keys stay yours</h2>
-      <p>SplitView only listens after the prefix, <kbd>Ctrl+A</kbd> by default. Every other key goes straight to the program in the pane, so vim, emacs and tmux work as they always do.</p>
-      <p>Press the prefix twice to send it through to the shell.</p>
-    </div>
-    <figure><img src="/assets/img/zoom.webp" loading="lazy" width="2000" height="1250" alt="One pane zoomed to fill the SplitView window, showing a source file in vim."></figure>
-  </section>
-
-  <section class="feature r-7-5">
-    <figure><img src="/assets/img/sidebar.webp" loading="lazy" width="2000" height="1250" alt="The file sidebar open beside three terminal panes, with the src folder expanded."></figure>
-    <div class="feature-copy">
-      <h2>A file tree that follows your shell</h2>
-      <p>Press <kbd>e</kbd> after the prefix and the sidebar opens on the focused pane's directory. It moves when you <code>cd</code> or switch panes, and updates as files are created, renamed or removed.</p>
-      <p>Press Enter on a file to type its path at the prompt.</p>
-    </div>
-  </section>
-
-  <section class="feature r-5-7">
-    <div class="feature-copy">
-      <h2>Edit without leaving the terminal</h2>
-      <p>Run <code>splitview edit file.rs</code> or press <kbd>e</kbd> on a file in the sidebar. The editor docks on the right, with tabs, syntax highlighting, and find and replace.</p>
-      <p>If a command changes the file while it's open, a clean buffer follows the disk. If you have unsaved edits, SplitView warns you and asks before it overwrites anything.</p>
-    </div>
-    <figure><img src="/assets/img/editor.webp" loading="lazy" width="2000" height="1250" alt="The code editor docked on the right showing pty.rs, with the file sidebar and terminal panes to its left."></figure>
-  </section>
-
-  <section class="feature r-7-5">
-    <figure><img src="/assets/img/background.webp" loading="lazy" width="1320" height="340" alt="The backgrounded panes picker listing a vite dev server and a TypeScript watcher, each with its latest output line."></figure>
-    <div class="feature-copy">
-      <h2>Send a dev server to the background</h2>
-      <p><kbd>b</kbd> hides a pane without stopping it. The process keeps running and its output keeps buffering. <kbd>Shift+B</kbd> lists what's running, with each pane's latest line, so you can bring one back or stop it.</p>
-    </div>
-  </section>
-
-  <section class="feature r-5-7">
-    <div class="feature-copy">
-      <h2>Make it look like yours</h2>
-      <p>Open Settings with <kbd>,</kbd> to choose a palette, font and divider thickness. You can also set aliases, a startup banner, and which details appear in the prompt.</p>
-    </div>
-    <figure><img src="/assets/img/display.webp" loading="lazy" width="1640" height="1200" alt="The Display settings panel with palette presets, font options, colors and divider thickness."></figure>
-  </section>
-
-  <section class="feature r-7-5">
-    <figure><img src="/assets/img/remote.webp" loading="lazy" width="1640" height="1070" alt="The Remote settings panel with remote control switched off and no paired devices."></figure>
-    <div class="feature-copy">
-      <h2>Remote control is built, and off by default</h2>
-      <p>Version 0.2.0 includes the desktop side of remote control: an encrypted server that lets a paired phone watch and type into your panes. Each device needs a pairing code and your approval on the desktop.</p>
-      <p><strong>The phone app isn't available yet</strong>, so there's nothing to pair with today. You can ignore this panel and nothing will listen on your network.</p>
-    </div>
-  </section>
-
-  <section class="keys" id="keys">
-    <h2>The keys</h2>
-    <p>Press the prefix, <kbd>Ctrl+A</kbd>, then one of these. Bindings are listed in full in Settings.</p>
-    <dl class="keys-list">
-      <div><dt>Split side by side</dt><dd><kbd>v</kbd> or <kbd>\</kbd></dd></div>
-      <div><dt>Split stacked</dt><dd><kbd>s</kbd> or <kbd>-</kbd></dd></div>
-      <div><dt>Move focus</dt><dd><kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd> or arrows</dd></div>
-      <div><dt>Focus next pane</dt><dd><kbd>o</kbd></dd></div>
-      <div><dt>Swap pane</dt><dd><kbd>Shift</kbd> + <kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd></dd></div>
-      <div><dt>Resize pane</dt><dd><kbd>Ctrl</kbd> + <kbd>h</kbd> <kbd>j</kbd> <kbd>k</kbd> <kbd>l</kbd></dd></div>
-      <div><dt>Zoom pane</dt><dd><kbd>z</kbd></dd></div>
-      <div><dt>Close pane</dt><dd><kbd>x</kbd></dd></div>
-      <div><dt>Move pane to its own window</dt><dd><kbd>d</kbd></dd></div>
-      <div><dt>Background pane</dt><dd><kbd>b</kbd></dd></div>
-      <div><dt>List background panes</dt><dd><kbd>Shift+B</kbd></dd></div>
-      <div><dt>New window</dt><dd><kbd>n</kbd></dd></div>
-      <div><dt>File sidebar</dt><dd><kbd>e</kbd></dd></div>
-      <div><dt>Editor</dt><dd><kbd>Shift+E</kbd></dd></div>
-      <div><dt>Settings</dt><dd><kbd>,</kbd></dd></div>
-    </dl>
-  </section>
-
-  <section class="get" id="download">
-    <h2>Download SplitView 0.2.0</h2>
-    <div class="get-grid">
-      <div>
-        <p><a class="button" href="/downloads/SplitView_0.2.0_x64-setup.exe">Download installer (.exe)</a></p>
-        <p class="note">Windows x64, 3.6 MB <span class="hash">SHA-256 6a7b2f6c2a10342a92c0f24af48c1f17b4a47a5a23ab19188ca5034d9911bfef</span></p>
-        <p><a href="/downloads/SplitView_0.2.0_x64_en-US.msi">Download the .msi package</a></p>
-        <p class="note">Windows x64, 5.2 MB <span class="hash">SHA-256 185481a701b9d8167ed96c5f4ee436da4af65ec98284a843e83cbbcb6f24cb46</span></p>
+  <!-- Demo ------------------------------------------------------------- -->
+  <section id="demo">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker">Try it here</span>
+        <h2>Two keystrokes to a new pane</h2>
+        <p>SplitView listens only after the prefix, <kbd>Ctrl</kbd> <kbd>A</kbd>. Click the window below, press the prefix, then <kbd>v</kbd>. Or use the buttons.</p>
       </div>
-      <div>
-        <h3 style="margin-top:0">Before you install</h3>
-        <ul>
-          <li>SplitView runs a POSIX shell, not PowerShell or cmd.exe. Install <a href="https://git-scm.com/download/win">Git for Windows</a> first if you don't have <code>bash</code> on your PATH.</li>
-          <li>The installers aren't code-signed yet, so Windows SmartScreen will warn you. Check the SHA-256 above, then choose More info and Run anyway.</li>
-          <li>macOS and Linux builds aren't available yet.</li>
-        </ul>
+      <div class="demo reveal">
+        <div class="app">
+          <div class="app-top">
+            <img src="/assets/img/icon.png" alt="" width="16" height="16">
+            <span class="t">SplitView</span>
+            <span class="app-tab">Git Bash</span>
+            <span id="pane-count" class="hide-sm">1 pane</span>
+          </div>
+          <div class="app-stage" id="stage" tabindex="0" role="application" aria-label="Demo window. Press Control A, then v to split, h j k l to move focus, z to zoom, x to close."></div>
+          <div class="app-status">
+            <span class="shell">Git Bash</span>
+            <span class="hide-sm">~/project</span>
+            <span class="right"><span id="prefix-badge" class="prefix-badge">Ctrl A prefix</span><span class="hide-sm">v0.3.0</span></span>
+          </div>
+        </div>
+        <div class="demo-side">
+          <div>
+            <h3>Prefix, then a command</h3>
+            <p>The same model the app uses: a split tree, a focused pane, and a 1.5-second prefix window.</p>
+          </div>
+          <div class="keypad" id="keypad">
+            <button type="button" class="prefix" id="prefix" data-key="prefix" aria-pressed="false"><kbd>Ctrl</kbd><kbd>A</kbd> prefix</button>
+            <button type="button" data-key="v"><kbd>v</kbd> Split right</button>
+            <button type="button" data-key="-"><kbd>-</kbd> Split down</button>
+            <button type="button" data-key="o"><kbd>o</kbd> Next pane</button>
+            <button type="button" data-key="z"><kbd>z</kbd> Zoom</button>
+            <button type="button" data-key="h"><kbd>h</kbd> Focus left</button>
+            <button type="button" data-key="l"><kbd>l</kbd> Focus right</button>
+            <button type="button" data-key="k"><kbd>k</kbd> Focus up</button>
+            <button type="button" data-key="x"><kbd>x</kbd> Close</button>
+          </div>
+          <p class="demo-status" id="demo-status" role="status" aria-live="polite">Click the window, then press Ctrl+A and v.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features --------------------------------------------------------- -->
+  <section id="features">
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <span class="kicker">Built for the keyboard</span>
+        <h2>Everything a terminal day needs, nothing in the way</h2>
+        <p>Panes are separated by a single line. The chrome is a thin top bar and a status line. The rest of the window is your shells.</p>
+      </div>
+
+      <div class="feature reveal">
+        <div class="feature-copy">
+          <h3>Your keys stay yours</h3>
+          <p>Outside prefix mode, every key goes straight to the program in the pane, so vim, emacs and tmux behave exactly as they do anywhere else. Press the prefix twice to send it through.</p>
+          <p>Zoom a pane to fill the window when you need to focus, then drop back into the layout without losing a line of scrollback.</p>
+          <div class="keys-inline"><span><kbd>z</kbd> zoom</span><span><kbd>Shift</kbd>+<kbd>hjkl</kbd> swap</span><span><kbd>Ctrl</kbd>+<kbd>hjkl</kbd> resize</span></div>
+        </div>
+        <figure class="shot"><img src="/assets/img/zoom.webp" loading="lazy" width="1010" height="1150" alt="One pane zoomed to fill the window, showing a git log, with a badge in the corner saying two panes are hidden."></figure>
+      </div>
+
+      <div class="feature flip reveal">
+        <div class="feature-copy">
+          <h3>Every action, one search away</h3>
+          <p>Forgot a binding? <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>P</kbd> opens the command palette: every action with its keys, a new pane in any installed shell, and every color theme. Type a few letters and press Enter.</p>
+        </div>
+        <figure class="shot"><img src="/assets/img/palette.webp" loading="lazy" width="960" height="460" alt="The command palette, filtered by the word split, listing the two split actions with their keyboard shortcuts, over dimmed terminal panes."></figure>
+      </div>
+
+      <div class="feature reveal">
+        <div class="feature-copy">
+          <h3>An Explorer that follows your shell</h3>
+          <p>Press <kbd>e</kbd> after the prefix and the Explorer opens on the focused pane's directory. It moves when you <code>cd</code> or switch panes, and updates live as files appear, move or disappear. It even follows Git Bash into <code>/tmp</code>.</p>
+          <div class="keys-inline"><span><kbd>j</kbd>/<kbd>k</kbd> move</span><span><kbd>Enter</kbd> insert path</span><span><kbd>c</kbd> cd here</span><span><kbd>e</kbd> edit</span></div>
+        </div>
+        <figure class="shot"><img src="/assets/img/explorer.webp" loading="lazy" width="880" height="760" alt="The Explorer listing the project's folders and files beside a terminal pane showing git history."></figure>
+      </div>
+
+      <div class="feature flip reveal">
+        <div class="feature-copy">
+          <h3>Edit without leaving the terminal</h3>
+          <p>Run <code>splitview edit file.rs</code>, or press <kbd>e</kbd> on a file in the Explorer. The editor docks on the right with tabs, syntax colors, line numbers, and find and replace.</p>
+          <p>When a command changes the file, a clean buffer follows the disk. If you have unsaved edits, SplitView says so and asks before it overwrites anything. Line endings and BOMs are kept, so a one-line change stays a one-line diff.</p>
+        </div>
+        <figure class="shot"><img src="/assets/img/editor.webp" loading="lazy" width="1000" height="760" alt="The editor docked on the right showing layout.rs with line numbers and syntax colors, next to a terminal pane."></figure>
+      </div>
+
+      <div class="feature reveal">
+        <div class="feature-copy">
+          <h3>Send a dev server to the background</h3>
+          <p><kbd>b</kbd> hides a pane without stopping it. The process keeps running and its output keeps buffering. <kbd>Shift</kbd> <kbd>B</kbd> lists what's running with each pane's latest line, so you can bring one back or stop it.</p>
+        </div>
+        <figure class="shot flat"><img src="/assets/img/background.webp" loading="lazy" width="750" height="193" alt="The backgrounded panes picker listing a Git Bash pane whose latest line is a Vite dev server URL."></figure>
+      </div>
+
+      <div class="feature flip reveal">
+        <div class="feature-copy">
+          <h3>Make it look like yours</h3>
+          <p>Settings (<kbd>,</kbd> after the prefix) has five palettes to start from, every color, font size and divider thickness, aliases for every shell, a startup banner, and which details the prompt shows.</p>
+        </div>
+        <figure class="shot flat"><img src="/assets/img/display.webp" loading="lazy" width="1040" height="720" alt="The Display settings with the Wire, Parrot, Midnight, Carbon and Matrix palettes, color fields, font size and divider thickness."></figure>
+      </div>
+
+      <div class="feature reveal">
+        <div class="feature-copy">
+          <h3>Remote control, off until you say so</h3>
+          <p>SplitView includes an encrypted server that lets a paired phone watch and type into your panes. Pairing takes a one-time code and your approval on the desktop, and the certificate is pinned.</p>
+          <div class="note">
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+            <span><strong>The phone app isn't available yet.</strong> Until it is, leave this switch off and nothing listens on your network.</span>
+          </div>
+        </div>
+        <figure class="shot flat"><img src="/assets/img/remote.webp" loading="lazy" width="1040" height="720" alt="The Remote settings with remote control switched off, the listen address and port options, and resize and startup switches."></figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- The rest --------------------------------------------------------- -->
+  <section>
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <span class="kicker">And the rest</span>
+        <h2>Small things that add up</h2>
+      </div>
+      <div class="cards reveal">
+        <div class="card">
+          <div class="icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></div>
+          <h3>Windows and detached panes</h3>
+          <p><kbd>n</kbd> opens a new window. <kbd>d</kbd> pops a pane into its own window, and it goes back when you close it.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg></div>
+          <h3>Any shell you have</h3>
+          <p>Git Bash, PowerShell, cmd, zsh. Pick a default on first run, or open a pane with any of them using <kbd>p</kbd>.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></div>
+          <h3>Clickable links</h3>
+          <p><kbd>Ctrl</kbd>+click a URL in any pane to open it in your browser.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" x2="15" y1="20" y2="20"/><line x1="12" x2="12" y1="4" y2="20"/></svg></div>
+          <h3>Font size on the fly</h3>
+          <p><kbd>Ctrl</kbd> <kbd>=</kbd> and <kbd>Ctrl</kbd> <kbd>-</kbd> resize every pane, and <kbd>Ctrl</kbd> <kbd>0</kbd> resets. JetBrains Mono is bundled.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg></div>
+          <h3>A config file when you want one</h3>
+          <p>Rebind any key, change the prefix or the prompt style in <code>config.toml</code>, then reload with <kbd>r</kbd>.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg></div>
+          <h3>Quiet when idle</h3>
+          <p>No webview, no blinking, no polling. When nothing changes, SplitView draws nothing and uses next to no CPU.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Keys ------------------------------------------------------------- -->
+  <section id="keys">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker">The keys</span>
+        <h2>Press <kbd>Ctrl</kbd> <kbd>A</kbd>, then…</h2>
+        <p>Every binding can be changed in <code>config.toml</code>, and Settings lists them all.</p>
+      </div>
+      <div class="keys reveal">
+        <div class="keygroup">
+          <h3>Panes</h3>
+          <dl>
+            <div><dt>Split side by side</dt><dd><kbd>v</kbd> or <kbd>\</kbd></dd></div>
+            <div><dt>Split stacked</dt><dd><kbd>s</kbd> or <kbd>-</kbd></dd></div>
+            <div><dt>Zoom pane</dt><dd><kbd>z</kbd></dd></div>
+            <div><dt>Close pane</dt><dd><kbd>x</kbd></dd></div>
+            <div><dt>Background / list</dt><dd><kbd>b</kbd> / <kbd>Shift</kbd><kbd>B</kbd></dd></div>
+            <div><dt>Detach to own window</dt><dd><kbd>d</kbd></dd></div>
+          </dl>
+        </div>
+        <div class="keygroup">
+          <h3>Focus, move, resize</h3>
+          <dl>
+            <div><dt>Move focus</dt><dd><kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd> or arrows</dd></div>
+            <div><dt>Next pane</dt><dd><kbd>o</kbd></dd></div>
+            <div><dt>Swap with neighbour</dt><dd><kbd>Shift</kbd> + <kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd></dd></div>
+            <div><dt>Resize</dt><dd><kbd>Ctrl</kbd> + <kbd>h</kbd><kbd>j</kbd><kbd>k</kbd><kbd>l</kbd></dd></div>
+            <div><dt>Send the prefix itself</dt><dd><kbd>Ctrl</kbd><kbd>A</kbd> twice</dd></div>
+          </dl>
+        </div>
+        <div class="keygroup">
+          <h3>Panels</h3>
+          <dl>
+            <div><dt>Explorer</dt><dd><kbd>e</kbd></dd></div>
+            <div><dt>Editor</dt><dd><kbd>Shift</kbd><kbd>E</kbd></dd></div>
+            <div><dt>Settings</dt><dd><kbd>,</kbd></dd></div>
+            <div><dt>Shell picker</dt><dd><kbd>p</kbd></dd></div>
+            <div><dt>New window</dt><dd><kbd>n</kbd></dd></div>
+          </dl>
+        </div>
+        <div class="keygroup">
+          <h3>No prefix needed</h3>
+          <dl>
+            <div><dt>Command palette</dt><dd><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>P</kbd></dd></div>
+            <div><dt>Insert a file's path</dt><dd><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>O</kbd></dd></div>
+            <div><dt>Font size</dt><dd><kbd>Ctrl</kbd> <kbd>=</kbd> <kbd>-</kbd> <kbd>0</kbd></dd></div>
+            <div><dt>Scroll back</dt><dd><kbd>Shift</kbd><kbd>PgUp</kbd></dd></div>
+            <div><dt>Save in the editor</dt><dd><kbd>Ctrl</kbd><kbd>S</kbd></dd></div>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Download --------------------------------------------------------- -->
+  <section id="download">
+    <div class="wrap">
+      <div class="get reveal">
+        <div class="get-main">
+          <span class="kicker">Download</span>
+          <h2>SplitView 0.3.0 for Windows</h2>
+          <p>A per-user install: no admin rights, and it replaces a 0.2.x install in place.</p>
+          <a class="btn btn-primary" href="/downloads/SplitView_0.3.0_x64-setup.exe">
+            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Download the installer
+          </a>
+          <div class="file">
+            <span>SplitView_0.3.0_x64-setup.exe · 5.7 MB · Windows 10 and 11, x64</span>
+            <span class="hash">SHA-256 <code id="hash">b35e54a96703e2be88921b2ce40717fe54d210ab3eeb034da21def38fc399b8f</code> <button type="button" class="copy" id="copy-hash">Copy</button></span>
+          </div>
+        </div>
+        <div class="get-side">
+          <h3>Before you install</h3>
+          <ul class="checks">
+            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><span>On first launch SplitView asks which shell to use. Git Bash gives the intended POSIX experience: install <a href="https://git-scm.com/download/win">Git for Windows</a> if you don't have it. PowerShell and cmd work too.</span></li>
+            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><span>The installer isn't code-signed yet, so SmartScreen will warn you. Check the SHA-256, then choose <em>More info</em> and <em>Run anyway</em>.</span></li>
+            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><span>Your settings live in <code>%APPDATA%\splitview</code> and are kept if you uninstall.</span></li>
+            <li><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><span>macOS and Linux builds aren't published yet.</span></li>
+          </ul>
+        </div>
       </div>
     </div>
   </section>
 </main>
 
 <footer class="foot">
-  <span>SplitView 0.2.0</span>
-  <nav aria-label="Legal"><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></nav>
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/assets/img/icon.png" alt="" width="22" height="22">SplitView</a>
+    <span>0.3.0 · made for the keyboard</span>
+    <nav aria-label="Legal"><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></nav>
+  </div>
 </footer>
-<script src="/assets/play.js" defer></script>
+<script src="/assets/site.js" defer></script>
 </body>
 </html>

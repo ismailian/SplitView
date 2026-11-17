@@ -5,50 +5,58 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Privacy: SplitView</title>
   <meta name="description" content="What the SplitView app and website do with your data.">
+  <meta name="theme-color" content="#0c0f13">
+  <meta name="color-scheme" content="dark">
   <link rel="icon" type="image/png" href="/assets/img/icon.png">
   <link rel="stylesheet" href="/assets/site.css">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<header class="bar">
-  <a class="mark" href="/" aria-label="SplitView home"><span>Split</span><span>View</span></a>
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="SplitView home"><img src="/assets/img/icon.png" alt="" width="26" height="26">SplitView</a>
+    <a class="btn btn-ghost btn-sm nav-end" href="/#download">Download</a>
+  </div>
 </header>
-<main id="main" class="doc">
-  <h1>Privacy</h1>
-  <p class="note">Last updated October 31, 2026. Covers SplitView 0.2.0 and this website.</p>
-  <p>SplitView has no accounts, no analytics and no telemetry. The app doesn't send your data to us, and we don't run a server that could receive it.</p>
+<main id="main" class="wrap">
+  <article class="doc">
+    <h1>Privacy</h1>
+    <p class="meta">Last updated November 17, 2026 · covers SplitView 0.3.0 and this website</p>
+    <p>SplitView has no accounts, no analytics and no telemetry. The app doesn't send your data to us, and we don't run a server that could receive it.</p>
 
-  <h2>The app</h2>
-  <p>SplitView doesn't record what you type or what your terminals print. Scrollback is held in memory and goes away when you close the pane. The app doesn't check for updates or contact any service of ours.</p>
-  <p>These are stored on your computer only:</p>
-  <ul>
-    <li><strong>Settings</strong>, including colors, aliases, banner text and panel widths, in the app's local webview storage.</li>
-    <li><strong>Files you open in the editor</strong>, which are read from and saved to your own disk.</li>
-  </ul>
-  <p>Programs you run inside SplitView, such as <code>git</code> or <code>npm</code>, make their own network connections. Those are outside SplitView's control.</p>
+    <h2>The app</h2>
+    <p>SplitView doesn't record what you type or what your terminals print. Scrollback is held in memory and goes away when you close the pane. The app doesn't check for updates or contact any service of ours.</p>
+    <p>These are stored on your computer only, in <code>%APPDATA%\splitview</code> on Windows:</p>
+    <ul>
+      <li><strong>Settings</strong> (<code>settings.json</code>): colors, font size, aliases, banner text, prompt options, your default shell and panel widths.</li>
+      <li><strong>Configuration</strong> (<code>config.toml</code>), if you create one.</li>
+      <li><strong>Files you open in the editor</strong>, which are read from and saved to your own disk.</li>
+    </ul>
+    <p>Programs you run inside SplitView, such as <code>git</code> or <code>npm</code>, make their own network connections. Those are outside SplitView's control.</p>
 
-  <h2>Remote control</h2>
-  <p>Remote control is off by default and nothing listens on your network unless you turn it on in Settings. The phone app isn't available yet. When you enable the feature on the desktop:</p>
-  <ul>
-    <li>SplitView creates a self-signed certificate and private key.</li>
-    <li>Your computer's name and the server's port are announced on your local network over mDNS, so a phone can find it.</li>
-    <li>In the Remote folder of your user config directory (<code>%APPDATA%\splitview\remote</code> on Windows), SplitView keeps the certificate and key, a list of paired devices with hashed access tokens, and an audit log. The log records events such as enabling the server, pairing attempts and connections, along with details like device names, addresses and pairing codes.</li>
-    <li>A paired device can see your pane titles, working directories and terminal output, and can type into your panes. That traffic is encrypted and goes directly between the device and your computer, not through us.</li>
-  </ul>
-  <p>You can revoke a device in Settings, which also ends its live session. Delete the Remote folder to remove the stored data.</p>
+    <h2>Remote control</h2>
+    <p>Remote control is off by default, and nothing listens on your network unless you turn it on in Settings. The phone app isn't available yet. When you enable the feature:</p>
+    <ul>
+      <li>SplitView creates a self-signed certificate and private key.</li>
+      <li>Your computer's name and the server's port are announced on your local network over mDNS, so a phone can find it.</li>
+      <li>In <code>%APPDATA%\splitview\remote</code>, SplitView keeps the certificate and key, a list of paired devices with hashed access tokens, and an audit log. The log records events such as enabling the server, pairing attempts and connections, with details like device names, addresses and pairing codes.</li>
+      <li>A paired device can see your pane titles, working directories and terminal output, and can type into your panes. That traffic is encrypted and goes directly between the device and your computer, not through us.</li>
+    </ul>
+    <p>You can revoke a device in Settings, which also ends its live session. Delete the <code>remote</code> folder to remove the stored data.</p>
 
-  <h2>Third-party components</h2>
-  <p>On Windows, SplitView uses the Microsoft Edge WebView2 runtime. If it's missing, the installer may download it from Microsoft. Microsoft's terms and privacy statement apply to that component.</p>
+    <h2>This website</h2>
+    <p>This site is hosted on Cloudflare Pages. It sets no cookies and uses no analytics, ads or trackers, and its fonts and scripts are served from this site. Cloudflare processes your request to deliver the pages, which involves technical data such as your IP address and browser details. See <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy policy</a>.</p>
 
-  <h2>This website</h2>
-  <p>This site is hosted on Cloudflare Pages. It sets no cookies and uses no analytics, ads or trackers, and its fonts are served from this site. Cloudflare processes your request to deliver the pages, which involves technical data such as your IP address and browser details. See <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy policy</a>.</p>
-
-  <h2>Changes and contact</h2>
-  <p>If this policy changes, we'll update it here and change the date above. Questions go to <a href="mailto:techcyber598@gmail.com">techcyber598@gmail.com</a>.</p>
+    <h2>Changes and contact</h2>
+    <p>If this policy changes, we'll update it here and change the date above. Questions go to <a href="mailto:techcyber598@gmail.com">techcyber598@gmail.com</a>.</p>
+  </article>
 </main>
 <footer class="foot">
-  <span>SplitView 0.2.0</span>
-  <nav aria-label="Legal"><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></nav>
+  <div class="wrap">
+    <a class="brand" href="/"><img src="/assets/img/icon.png" alt="" width="22" height="22">SplitView</a>
+    <span>0.3.0</span>
+    <nav aria-label="Legal"><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></nav>
+  </div>
 </footer>
 </body>
 </html>
