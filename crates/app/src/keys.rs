@@ -7,6 +7,7 @@
 //! (or editor) underneath never sees it. Everything else is left alone: outside
 //! prefix mode keys flow to the focused widget untouched.
 
+use std::collections::HashSet;
 use std::time::Instant;
 
 use egui::{Event, Key, Modifiers};
@@ -130,6 +131,10 @@ pub fn route(
 ) -> Routed {
     let now = Instant::now();
     let mut out = Routed::default();
+    // Keys whose press we saw, across frames: a release without one is a
+    // press egui-winit turned into a clipboard command (see below).
+    let down_id = egui::Id::new("sv-keys-down");
+    let mut down: HashSet<Key> = ctx.data(|d| d.get_temp(down_id)).unwrap_or_default();
     ctx.input_mut(|i| {
         let events = std::mem::take(&mut i.events);
         let mut kept = Vec::with_capacity(events.len());
@@ -142,6 +147,7 @@ pub fn route(
                     modifiers,
                     ..
                 } => {
+                    down.insert(*key);
                     swallow_text = false;
                     let in_prefix = keymap.in_prefix(now);
                     // The sidebar gets first refusal on its own keys, but never
@@ -167,6 +173,36 @@ pub fn route(
                         }
                     }
                 }
+                // Ctrl held through `prefix, v`: egui-winit turns Ctrl+V into a
+                // Paste event and drops the key press — and with no text on the
+                // clipboard (empty, an image, files copied in Explorer) it sends
+                // nothing at all. Only the release survives, so a C/X/V release
+                // whose press never arrived stands in for it while a prefix is
+                // pending. (With text on the clipboard the Paste arm below fires
+                // first and ends the prefix, so this can't double up.)
+                Event::Key {
+                    key,
+                    pressed: false,
+                    ..
+                } if !down.remove(key)
+                    && matches!(key, Key::C | Key::X | Key::V)
+                    && keymap.in_prefix(now) =>
+                {
+                    let name = key_name(*key).unwrap_or_default();
+                    match keymap.handle(&chord(true, false, false, false, name), now) {
+                        Outcome::Action(a) => out.actions.push(a),
+                        Outcome::SendPrefix => out.send_prefix = true,
+                        _ => {}
+                    }
+                }
+                Event::Key {
+                    key,
+                    pressed: false,
+                    ..
+                } => {
+                    down.remove(key);
+                    kept.push(ev);
+                }
                 // The character a consumed keystroke would have typed.
                 Event::Text(_) if swallow_text => swallow_text = false,
                 // Ctrl+C / Ctrl+V / Ctrl+X arrive as clipboard events, not keys;
@@ -188,6 +224,7 @@ pub fn route(
         }
         i.events = kept;
     });
+    ctx.data_mut(|d| d.insert_temp(down_id, down));
     out
 }
 
@@ -223,6 +260,75 @@ pub fn take_all(ctx: &egui::Context) -> (Vec<(Key, Modifiers)>, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sv_core::keymap::KeymapConfig;
+
+    fn key(key: Key, pressed: bool, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    /// Run one frame of `events` through `route`.
+    fn frame(ctx: &egui::Context, km: &mut Keymap, events: Vec<Event>) -> Routed {
+        let mut routed = Routed::default();
+        let raw = egui::RawInput {
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(raw, |ui| routed = route(ui.ctx(), km, |_, _, _| false));
+        routed
+    }
+
+    /// `Ctrl+A`, then `V` with Ctrl still held and nothing on the clipboard:
+    /// egui-winit delivers only the prefix press and V's release.
+    #[test]
+    fn prefix_then_ctrl_v_with_an_empty_clipboard_still_splits() {
+        let ctx = egui::Context::default();
+        let mut km = Keymap::new(KeymapConfig::default());
+        frame(&ctx, &mut km, vec![key(Key::A, true, Modifiers::CTRL)]);
+        let r = frame(&ctx, &mut km, vec![key(Key::V, false, Modifiers::CTRL)]);
+        assert_eq!(r.actions, ["split_right"]);
+    }
+
+    /// With text on the clipboard the Paste event carries it; the later
+    /// release must not fire a second time.
+    #[test]
+    fn prefix_then_ctrl_v_with_text_splits_once() {
+        let ctx = egui::Context::default();
+        let mut km = Keymap::new(KeymapConfig::default());
+        frame(&ctx, &mut km, vec![key(Key::A, true, Modifiers::CTRL)]);
+        let r = frame(&ctx, &mut km, vec![Event::Paste("text".into())]);
+        assert_eq!(r.actions, ["split_right"]);
+        let r = frame(&ctx, &mut km, vec![key(Key::V, false, Modifiers::CTRL)]);
+        assert!(r.actions.is_empty());
+    }
+
+    /// A V typed before the prefix and released after it is not a command.
+    #[test]
+    fn a_release_whose_press_was_seen_is_ignored() {
+        let ctx = egui::Context::default();
+        let mut km = Keymap::new(KeymapConfig::default());
+        frame(&ctx, &mut km, vec![key(Key::V, true, Modifiers::NONE)]);
+        frame(&ctx, &mut km, vec![key(Key::A, true, Modifiers::CTRL)]);
+        let r = frame(&ctx, &mut km, vec![key(Key::V, false, Modifiers::NONE)]);
+        assert!(r.actions.is_empty());
+        // The prefix is still pending: a plain `v` now splits.
+        let r = frame(&ctx, &mut km, vec![key(Key::V, true, Modifiers::NONE)]);
+        assert_eq!(r.actions, ["split_right"]);
+    }
+
+    #[test]
+    fn prefix_then_plain_v_splits() {
+        let ctx = egui::Context::default();
+        let mut km = Keymap::new(KeymapConfig::default());
+        frame(&ctx, &mut km, vec![key(Key::A, true, Modifiers::CTRL)]);
+        let r = frame(&ctx, &mut km, vec![key(Key::V, true, Modifiers::NONE)]);
+        assert_eq!(r.actions, ["split_right"]);
+    }
 
     #[test]
     fn chords_for_keys() {

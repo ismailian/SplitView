@@ -166,6 +166,62 @@ fn replace(target: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
+/// What "reveal" is called on this OS (sidebar menus).
+pub const REVEAL_LABEL: &str = if cfg!(windows) {
+    "Reveal in File Explorer"
+} else if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else {
+    "Open in file manager"
+};
+
+/// Show `path` in the OS file manager: a folder opens; a file is selected in its
+/// folder (Windows, macOS — Linux has no portable "select", so its folder opens).
+/// The path goes over as one argument, never through a shell, and the child is
+/// reaped on a worker thread.
+pub fn reveal(path: &str) {
+    let path = path.to_owned();
+    let _ = std::thread::Builder::new()
+        .name("sv-reveal".into())
+        .spawn(move || {
+            let p = Path::new(&path);
+            let is_dir = p.is_dir();
+            #[cfg(windows)]
+            let child = {
+                use std::os::windows::process::CommandExt;
+                let explorer = std::env::var_os("SystemRoot")
+                    .map(|r| PathBuf::from(r).join("explorer.exe"))
+                    .unwrap_or_else(|| PathBuf::from("explorer.exe"));
+                let mut c = std::process::Command::new(explorer);
+                if is_dir {
+                    c.arg(&path);
+                } else {
+                    // Explorer parses `/select,"<path>"` itself; std's quoting of
+                    // the whole argument would break it on paths with spaces.
+                    // `"` can't occur in a Windows path, so this can't be escaped.
+                    c.raw_arg(format!("/select,\"{path}\""));
+                }
+                c.spawn()
+            };
+            #[cfg(target_os = "macos")]
+            let child = {
+                let mut c = std::process::Command::new("open");
+                if !is_dir {
+                    c.arg("-R");
+                }
+                c.arg(&path).spawn()
+            };
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let child = {
+                let dir = if is_dir { p } else { p.parent().unwrap_or(p) };
+                std::process::Command::new("xdg-open").arg(dir).spawn()
+            };
+            if let Ok(mut c) = child {
+                let _ = c.wait();
+            }
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

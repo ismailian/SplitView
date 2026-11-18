@@ -140,6 +140,7 @@ splitview/
 │   │   ├── tree.rs            ← sidebar rows + watch set
 │   │   ├── editor.rs          ← EOL/BOM round trip, indent, minimal change, find
 │   │   ├── highlight.rs       ← one-pass syntax highlighter (per-language table)
+│   │   ├── git.rs             ← `git status --porcelain=v2` parser, row lookup
 │   │   └── fuzzy.rs           ← command-palette matching
 │   ├── term/  splitview-term (lib sv_term)
 │   │   ├── lib.rs             ← Terminal, preview_line, url_at
@@ -165,6 +166,7 @@ splitview/
 │       ├── profiles.rs        ← installed shells (TESTED)
 │       ├── files.rs           ← text read/stat/save for the editor (TESTED)
 │       ├── watch.rs           ← sidebar filesystem watch (TESTED)
+│       ├── git.rs             ← runs `git status` for the sidebar (TESTED)
 │       ├── store.rs           ← config dir paths, config.toml loading
 │       ├── shot.rs            ← --shot scenes + PNG writer
 │       └── remote/            ← remote control (§21)
@@ -316,8 +318,16 @@ Left of the panes, outside the layout tree. Follows the focused pane's cwd (OSC
 threads; while open, exactly the directories on screen are watched (`watch.rs`),
 changes are debounced (~120 ms) and only changed directories re-read. Keys: `j/k`,
 `l/h` (open/fold; `l` on a file opens it), `Enter` (toggle dir / insert path),
-`c` cd, `e` edit, `y` insert path, `u` root up, `.` hidden files, `r` reload,
+`c` cd, `e` edit, `y` insert path, `o` reveal in the OS file manager,
+`m`/`Shift+m` next/previous changed row, `u` root up, `.` hidden files, `r` reload,
 `<`/`>`/`=` width, `g/G`, `Esc` back. The edge drags; width persists.
+
+Inside a git work tree the rows show `git status` (coloured name + letter,
+folders a dot) and a recap row shows branch, ahead/behind and totals. It shells
+out to the user's `git` with `--no-optional-locks` (never take `index.lock`
+under a `git commit` typed next door) and `CREATE_NO_WINDOW` on Windows, off
+thread, at most every 750 ms: on root change, watch events, `r`, and every
+prompt of the focused pane (OSC 7), which is how commits/checkouts show up.
 
 ### The Editor
 
@@ -477,6 +487,14 @@ follow it.
 - **Stealing terminal keys.** Only intercept in prefix mode (or the explicit
   modifier-carrying globals). Remove the consumed key's `Text` event too.
 - **Per-frame repaint loops** burn a core in the background (§13).
+- **Ctrl+C/X/V never arrive as key presses.** egui-winit turns them into
+  Copy/Cut/Paste (Paste only if the clipboard has text — otherwise *nothing*).
+  `keys::route` treats a C/X/V release with no seen press as the chord while a
+  prefix is pending, so `Ctrl+A, Ctrl+V` splits with any clipboard.
+- **Dividers are registered after the panes.** egui gives a drag to the topmost
+  widget; the terminals sense drags for selection and would steal the grab band.
+- **A folder that leaves the watch set goes stale.** `Sidebar::rebuild` re-reads
+  every directory that becomes shown again; don't trust a cached listing.
 - **egui focus only lands while the OS window is focused** — request it then, once.
 - **Resize mismatch.** Grid and PTY must change together (`out.resized` → `Hub::resize`).
 - **Zombie children / leaked threads.** Kill → drop master → forget; the waiter

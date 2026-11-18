@@ -10,6 +10,7 @@ mod dialogs;
 mod editor;
 mod error;
 mod files;
+mod git;
 mod hub;
 mod keys;
 mod panes;

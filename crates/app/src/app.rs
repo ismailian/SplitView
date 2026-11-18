@@ -777,6 +777,13 @@ impl App {
                     let root = self.panes.get(&id).and_then(|p| p.msys_root.clone());
                     let temp = std::env::temp_dir().to_string_lossy().into_owned();
                     let native = sv_core::paths::msys_to_native(&path, root.as_deref(), &temp);
+                    // Every prompt reports the cwd: a command just finished, and it
+                    // may have been a `git commit`/`checkout`. Refresh the change marks.
+                    if let Some(wi) = self.window_of(id)
+                        && self.windows[wi].layout.focused == Some(id)
+                    {
+                        self.windows[wi].sidebar.want_git();
+                    }
                     if let Some(p) = self.panes.get_mut(&id)
                         && p.cwd.as_deref() != Some(native.as_str())
                     {
@@ -790,14 +797,19 @@ impl App {
                     }
                 }
                 UiEvent::AppCommand(id, cmd) => self.app_command(id, &cmd),
-                UiEvent::FsChanged(key, dirs) => {
+                UiEvent::FsChanged(key, batch) => {
                     if let Some(wi) = self.win(key) {
-                        self.windows[wi].sidebar.changed(&dirs, &self.hub);
+                        self.windows[wi].sidebar.changed(&batch, &self.hub);
                     }
                 }
                 UiEvent::Listing(dir, result) => {
                     for w in &mut self.windows {
                         w.sidebar.listed(&dir, &result, &self.hub);
+                    }
+                }
+                UiEvent::Git(key, status) => {
+                    if let Some(wi) = self.win(key) {
+                        self.windows[wi].sidebar.git_done(status);
                     }
                 }
                 UiEvent::FilePicked(Some(path)) => {
@@ -1081,6 +1093,7 @@ impl App {
                 Action::InsertPath(p) => self.insert_path(wi, &p),
                 Action::ChangeDir(p) => self.change_dir(wi, &p),
                 Action::OpenFile(p) => self.open_in_editor(wi, &p),
+                Action::Reveal(p) => crate::files::reveal(&p),
                 Action::Leave => self.windows[wi].focus = Focus::Terminal,
                 Action::Focus => self.windows[wi].focus = Focus::Sidebar,
                 Action::Close => {

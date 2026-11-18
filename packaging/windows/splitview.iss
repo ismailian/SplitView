@@ -1,6 +1,6 @@
 ; SplitView Windows installer (Inno Setup 6.3+).
 ; Build with packaging\windows\build-installer.ps1 (it builds, signs and packages),
-; or by hand:  ISCC /DAppVersion=0.3.0 packaging\windows\splitview.iss
+; or by hand:  ISCC /DAppVersion=0.4.0 packaging\windows\splitview.iss
 ; Needs target\release\splitview.exe. Output: dist\SplitView_<version>_x64-setup.exe
 
 #ifndef AppVersion

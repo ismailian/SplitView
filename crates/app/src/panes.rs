@@ -79,7 +79,55 @@ impl App {
         };
         let many = rects.len() > 1;
 
+        // ---- panes ----
+        let mut focus_to: Option<PaneId> = None;
+        let mut header_action: Option<(PaneId, &'static str)> = None;
+        let mut open_url = None;
+        for &(id, r) in &rects {
+            let is_focused = Some(id) == focused;
+            let Some(pane) = self.panes.get_mut(&id) else {
+                continue;
+            };
+            let mut body = r;
+            if headers {
+                let h = Rect::from_min_size(r.min, vec2(r.width(), theme::PANE_HEADER_H));
+                body.min.y = h.max.y;
+                if let Some(a) = pane_header(ui, h, pane, is_focused && many, &self.skin, key) {
+                    header_action = Some((id, a));
+                }
+            }
+            let take_focus = is_focused && w_focus == Focus::Terminal && !modal_here;
+            let out = pane.view.show(
+                ui,
+                body,
+                &pane.term,
+                &self.skin.term,
+                ShowOpts {
+                    take_focus,
+                    interactive: !modal_here,
+                    dim: self.settings.display.dim_inactive && many && !is_focused,
+                    pad: vec2(8.0, 4.0),
+                },
+            );
+            if !out.input.is_empty() {
+                let _ = self.hub.write(id, &out.input);
+            }
+            if let Some(s) = out.resized {
+                let _ = self.hub.resize(id, s);
+            }
+            if out.pressed && (!is_focused || w_focus != Focus::Terminal) {
+                focus_to = Some(id);
+            }
+            if out.open_url.is_some() {
+                open_url = out.open_url;
+            }
+        }
+
         // ---- dividers ----
+        // After the panes, on purpose: egui gives a drag to the topmost widget
+        // under the pointer, and each terminal senses drags (text selection)
+        // over its whole body. Registered first, a divider's grab band lost to
+        // the terminals on both sides and only its 1 px line could be grabbed.
         if layout.zoomed.is_none() {
             for s in layout.splits() {
                 let top_left = px(s.rect.x, s.rect.y);
@@ -130,50 +178,6 @@ impl App {
                         self.skin.divider
                     },
                 );
-            }
-        }
-
-        // ---- panes ----
-        let mut focus_to: Option<PaneId> = None;
-        let mut header_action: Option<(PaneId, &'static str)> = None;
-        let mut open_url = None;
-        for &(id, r) in &rects {
-            let is_focused = Some(id) == focused;
-            let Some(pane) = self.panes.get_mut(&id) else {
-                continue;
-            };
-            let mut body = r;
-            if headers {
-                let h = Rect::from_min_size(r.min, vec2(r.width(), theme::PANE_HEADER_H));
-                body.min.y = h.max.y;
-                if let Some(a) = pane_header(ui, h, pane, is_focused && many, &self.skin, key) {
-                    header_action = Some((id, a));
-                }
-            }
-            let take_focus = is_focused && w_focus == Focus::Terminal && !modal_here;
-            let out = pane.view.show(
-                ui,
-                body,
-                &pane.term,
-                &self.skin.term,
-                ShowOpts {
-                    take_focus,
-                    interactive: !modal_here,
-                    dim: self.settings.display.dim_inactive && many && !is_focused,
-                    pad: vec2(8.0, 4.0),
-                },
-            );
-            if !out.input.is_empty() {
-                let _ = self.hub.write(id, &out.input);
-            }
-            if let Some(s) = out.resized {
-                let _ = self.hub.resize(id, s);
-            }
-            if out.pressed && (!is_focused || w_focus != Focus::Terminal) {
-                focus_to = Some(id);
-            }
-            if out.open_url.is_some() {
-                open_url = out.open_url;
             }
         }
 

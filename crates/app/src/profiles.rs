@@ -230,6 +230,33 @@ fn display_name(id: &str) -> &'static str {
     }
 }
 
+/// The `git` executable: the first on `PATH`, else (Windows) Git for Windows in
+/// its usual places — a GUI app launched from the Start menu may have a PATH
+/// without it even though Git Bash is installed.
+pub fn git_program() -> Option<PathBuf> {
+    if let Some(g) = which_all("git").into_iter().next() {
+        return Some(g);
+    }
+    #[cfg(windows)]
+    {
+        let env_path = |k: &str| std::env::var_os(k).map(PathBuf::from);
+        let mut roots = Vec::new();
+        for key in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+            if let Some(p) = env_path(key) {
+                roots.push(p.join("Git"));
+            }
+        }
+        if let Some(p) = env_path("LOCALAPPDATA") {
+            roots.push(p.join("Programs").join("Git"));
+        }
+        roots
+            .into_iter()
+            .find_map(|r| existing(r.join("cmd").join("git.exe")))
+    }
+    #[cfg(not(windows))]
+    None
+}
+
 /// The program to run when neither the frontend nor the config named one: the
 /// first detected profile, which is a POSIX shell whenever one is installed.
 pub fn default_program() -> Option<String> {

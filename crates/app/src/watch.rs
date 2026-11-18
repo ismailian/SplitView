@@ -9,6 +9,12 @@
 //!   changes what a directory shows; writing a file's contents or touching its
 //!   metadata (a build rewriting outputs, an editor saving) does not. Those are
 //!   dropped in the OS callback, before anything is allocated or locked.
+//! - **Content changes are a flag, not a re-list.** They can't change what a
+//!   directory shows, but they do change `git status`, so a batch says whether
+//!   anything in the tree was written ([`Batch::contents`]). A batch with only
+//!   that flag waits [`CONTENT_DEBOUNCE`], so a build writing into `target/`
+//!   wakes the UI about once a second, not ten times. Git's own bookkeeping in
+//!   `.git/` is ignored except the index and `HEAD` (a commit, a checkout).
 //! - **Coalesced.** After the first change, changes are gathered for
 //!   [`DEBOUNCE`] and delivered as one de-duplicated batch of directories, so
 //!   `npm install` produces a few messages a second, not thousands.
@@ -40,6 +46,24 @@ use crate::error::{Error, Result};
 /// enough that a `touch` in the terminal shows up before you look over.
 const DEBOUNCE: Duration = Duration::from_millis(120);
 
+/// How long a batch that only says "contents changed" gathers before it is sent.
+const CONTENT_DEBOUNCE: Duration = Duration::from_millis(1000);
+
+/// What one flush reports.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Batch {
+    /// Displayed directories whose listing may have changed.
+    pub dirs: Vec<String>,
+    /// Something under the watch was created, removed or written.
+    pub contents: bool,
+}
+
+/// What the OS callback tells the flusher.
+enum Signal {
+    Dir(Arc<str>),
+    Contents,
+}
+
 /// Whether a watch covers subdirectories (see the module docs for why this
 /// differs by platform).
 const RECURSIVE: bool = cfg!(windows);
@@ -62,9 +86,9 @@ impl DirWatch {
     /// nothing until [`set_dirs`](Self::set_dirs).
     /// `sink` returns false once nobody is listening, which ends the flusher
     /// thread.
-    pub fn new(sink: impl FnMut(Vec<String>) -> bool + Send + 'static) -> Result<Self> {
+    pub fn new(sink: impl FnMut(Batch) -> bool + Send + 'static) -> Result<Self> {
         let dirs: Arc<Mutex<DirMap>> = Arc::default();
-        let (tx, rx) = mpsc::channel::<Arc<str>>();
+        let (tx, rx) = mpsc::channel::<Signal>();
         let routes = Arc::clone(&dirs);
         // The callback owns the only sender, so dropping the watcher ends the
         // flusher thread (its `recv` fails) — no thread outlives its watch.
@@ -151,9 +175,28 @@ fn changes_listing(kind: &EventKind) -> bool {
     }
 }
 
-/// OS callback: turn one event into the displayed directories it affects.
-fn route(event: &Event, dirs: &Mutex<DirMap>, tx: &Sender<Arc<str>>) {
+/// Whether a change at `path` can change `git status`: anything in the work
+/// tree, but inside `.git` only the index and `HEAD` (lock files, objects and
+/// logs churn on every git command and say nothing new).
+fn affects_status(path: &Path) -> bool {
+    let mut parts = path.components().map(|c| c.as_os_str());
+    if !parts.any(|c| c == ".git") {
+        return true;
+    }
+    let rest: Vec<_> = parts.collect();
+    matches!(rest.as_slice(), [f] if *f == "index" || *f == "HEAD")
+}
+
+/// OS callback: turn one event into the displayed directories it affects, and
+/// say whether it touched the tree at all.
+fn route(event: &Event, dirs: &Mutex<DirMap>, tx: &Sender<Signal>) {
     let rescan = event.need_rescan();
+    if matches!(event.kind, EventKind::Access(_)) && !rescan {
+        return;
+    }
+    if rescan || event.paths.iter().any(|p| affects_status(p)) {
+        let _ = tx.send(Signal::Contents);
+    }
     if !rescan && !changes_listing(&event.kind) {
         return;
     }
@@ -161,39 +204,58 @@ fn route(event: &Event, dirs: &Mutex<DirMap>, tx: &Sender<Arc<str>>) {
     if rescan {
         // The OS dropped events: anything on screen may be stale.
         for key in dirs.values() {
-            let _ = tx.send(Arc::clone(key));
+            let _ = tx.send(Signal::Dir(Arc::clone(key)));
         }
         return;
     }
     for path in &event.paths {
         // The directory that gained or lost this entry…
         if let Some(key) = path.parent().and_then(|p| dirs.get(p)) {
-            let _ = tx.send(Arc::clone(key));
+            let _ = tx.send(Signal::Dir(Arc::clone(key)));
         }
         // …and a displayed directory that was itself removed or renamed.
         if let Some(key) = dirs.get(path) {
-            let _ = tx.send(Arc::clone(key));
+            let _ = tx.send(Signal::Dir(Arc::clone(key)));
         }
     }
 }
 
 /// Flusher thread: wait (without polling) for a change, gather more for
-/// [`DEBOUNCE`], send the de-duplicated batch. Returns when the watcher is
-/// dropped or the sink stops listening.
-fn flush(rx: &Receiver<Arc<str>>, mut sink: impl FnMut(Vec<String>) -> bool) {
+/// [`DEBOUNCE`] ([`CONTENT_DEBOUNCE`] while only contents changed), send the
+/// de-duplicated batch. Returns when the watcher is dropped or the sink stops
+/// listening.
+fn flush(rx: &Receiver<Signal>, mut sink: impl FnMut(Batch) -> bool) {
     while let Ok(first) = rx.recv() {
-        let mut batch = HashSet::from([first]);
-        let deadline = Instant::now() + DEBOUNCE;
+        let start = Instant::now();
+        let mut dirs: HashSet<Arc<str>> = HashSet::new();
+        let mut contents = false;
+        let mut take = |sig: Signal, dirs: &mut HashSet<Arc<str>>| match sig {
+            Signal::Dir(d) => {
+                dirs.insert(d);
+            }
+            Signal::Contents => contents = true,
+        };
+        take(first, &mut dirs);
         loop {
+            // A listing change is worth showing quickly; a content-only batch
+            // (git marks) can wait, and folds a build's writes together.
+            let wait = if dirs.is_empty() {
+                CONTENT_DEBOUNCE
+            } else {
+                DEBOUNCE
+            };
+            let deadline = start + wait;
             match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                Ok(dir) => {
-                    batch.insert(dir);
-                }
+                Ok(sig) => take(sig, &mut dirs),
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
-        if !sink(batch.iter().map(|d| d.to_string()).collect()) {
+        let batch = Batch {
+            dirs: dirs.iter().map(|d| d.to_string()).collect(),
+            contents,
+        };
+        if !sink(batch) {
             return;
         }
     }
@@ -213,12 +275,46 @@ mod tests {
     }
 
     fn routed(event: Event, dirs: &Mutex<DirMap>) -> Vec<String> {
+        routed_all(event, dirs).0
+    }
+
+    /// (dirs, whether a contents signal was sent)
+    fn routed_all(event: Event, dirs: &Mutex<DirMap>) -> (Vec<String>, bool) {
         let (tx, rx) = mpsc::channel();
         route(&event, dirs, &tx);
         drop(tx);
-        let mut out: Vec<String> = rx.iter().map(|k| k.to_string()).collect();
+        let mut out = Vec::new();
+        let mut contents = false;
+        for s in rx.iter() {
+            match s {
+                Signal::Dir(k) => out.push(k.to_string()),
+                Signal::Contents => contents = true,
+            }
+        }
         out.sort();
-        out
+        (out, contents)
+    }
+
+    #[test]
+    fn content_writes_raise_the_contents_flag_but_git_internals_do_not() {
+        let dirs = map(&["/p"]);
+        let write = |p: &str| Event::new(EventKind::Modify(ModifyKind::Any)).add_path(p.into());
+        assert_eq!(routed_all(write("/p/src/deep/a.rs"), &dirs), (vec![], true));
+        assert_eq!(routed_all(write("/p/.git/index"), &dirs), (vec![], true));
+        assert_eq!(routed_all(write("/p/.git/HEAD"), &dirs), (vec![], true));
+        assert_eq!(
+            routed_all(write("/p/.git/index.lock"), &dirs),
+            (vec![], false)
+        );
+        assert_eq!(
+            routed_all(write("/p/.git/objects/ab/cd"), &dirs),
+            (vec![], false)
+        );
+        let access =
+            Event::new(EventKind::Access(notify::event::AccessKind::Any)).add_path("/p/a".into());
+        assert_eq!(routed_all(access, &dirs), (vec![], false));
+        let create = Event::new(EventKind::Create(CreateKind::File)).add_path("/p/n".into());
+        assert_eq!(routed_all(create, &dirs), (vec!["/p".to_string()], true));
     }
 
     #[test]
@@ -282,42 +378,42 @@ mod tests {
 
     #[test]
     fn flush_coalesces_a_burst_into_one_batch() {
-        let (tx, rx) = mpsc::channel::<Arc<str>>();
+        let (tx, rx) = mpsc::channel::<Signal>();
         for d in ["/a", "/b", "/a", "/a"] {
-            tx.send(Arc::from(d)).expect("send");
+            tx.send(Signal::Dir(Arc::from(d))).expect("send");
         }
         drop(tx);
         let mut batches = Vec::new();
         flush(&rx, |mut b| {
-            b.sort();
-            batches.push(b);
+            b.dirs.sort();
+            batches.push(b.dirs);
             true
         });
         // The sender vanished mid-gather, so nothing is sent: the watch is gone.
         assert!(batches.is_empty());
 
-        let (tx, rx) = mpsc::channel::<Arc<str>>();
+        let (tx, rx) = mpsc::channel::<Signal>();
         let handle = std::thread::spawn(move || {
             let mut batches = Vec::new();
             flush(&rx, |mut b| {
-                b.sort();
-                batches.push(b);
+                b.dirs.sort();
+                batches.push(b.dirs);
                 false // stop after the first batch
             });
             batches
         });
         for d in ["/a", "/b", "/a"] {
-            tx.send(Arc::from(d)).expect("send");
+            tx.send(Signal::Dir(Arc::from(d))).expect("send");
         }
         let batches = handle.join().expect("flusher");
         assert_eq!(batches, [vec!["/a".to_string(), "/b".to_string()]]);
     }
 
     /// Wait up to `timeout` for a batch containing `dir`.
-    fn wait_for(rx: &Receiver<Vec<String>>, dir: &str, timeout: Duration) -> bool {
+    fn wait_for(rx: &Receiver<Batch>, dir: &str, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while let Ok(batch) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            if batch.iter().any(|d| d == dir) {
+            if batch.dirs.iter().any(|d| d == dir) {
                 return true;
             }
         }

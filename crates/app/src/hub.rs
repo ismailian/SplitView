@@ -48,9 +48,11 @@ pub enum UiEvent {
     /// The injected `splitview …` command ran in a pane.
     AppCommand(PaneId, String),
     /// The file sidebar's watch saw these directories change.
-    FsChanged(u64, Vec<String>),
+    FsChanged(u64, crate::watch::Batch),
     /// A directory listing finished (sidebar reads run off the UI thread).
     Listing(String, std::result::Result<crate::sidebar::DirRead, String>),
+    /// A sidebar's `git status` finished (`None`: not a repository).
+    Git(u64, Option<Box<sv_core::git::GitStatus>>),
     /// The native file picker returned.
     FilePicked(Option<String>),
     /// Remote control wants something from the UI.

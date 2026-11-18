@@ -8,10 +8,12 @@
 //! * [`tree`] — the file sidebar's rows
 //! * [`editor`], [`highlight`] — the editor panel's model and syntax colouring
 //! * [`fuzzy`] — command palette matching
+//! * [`git`] — `git status` parsing for the sidebar
 
 pub mod config;
 pub mod editor;
 pub mod fuzzy;
+pub mod git;
 pub mod highlight;
 pub mod keymap;
 pub mod layout;

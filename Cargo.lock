@@ -3505,7 +3505,7 @@ dependencies = [
 
 [[package]]
 name = "splitview"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64",
  "bytes",
@@ -3542,7 +3542,7 @@ dependencies = [
 
 [[package]]
 name = "splitview-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "toml",
@@ -3550,7 +3550,7 @@ dependencies = [
 
 [[package]]
 name = "splitview-term"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "alacritty_terminal",
  "egui",
