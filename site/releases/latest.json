@@ -1,7 +1,7 @@
 {
-  "version": "0.4.0",
-  "url": "https://github.com/ismailian/SplitView/releases/download/v0.4.0/SplitView_0.4.0_x64-setup.exe",
-  "size": 6004532,
-  "sha256": "c4070184bf556e9e0d24c11b6c7aa1360b012e253b8e8c2be7b57670d0959142",
-  "changelog": "What's new\n- Git status in the Explorer: changed files get a colour and a status letter, folders a dot, and a recap row shows the branch, ahead/behind and change counts. m / Shift+m jump between changed rows.\n- Reveal in File Explorer: o (or the right-click menu) on any file, folder or the root.\n\nFixes\n- Ctrl+A then Ctrl+V now splits even when the clipboard is empty or holds an image or files.\n- Dragging a divider between panes resizes again instead of starting a text selection.\n- The Explorer shows changes on disk right away, including in collapsed or scrolled-away folders."
+    "version":  "0.5.0",
+    "url":  "https://github.com/ismailian/SplitView/releases/download/v0.5.0/SplitView_0.5.0_x64-setup.exe",
+    "size":  6293621,
+    "sha256":  "7f3eca01e1c96f7c133b38ceb06f7fe0aa91dd046f7b007c685970002b086706",
+    "changelog":  "What\u0027s new\n- Scratchpad (prefix w, or the pencil in the top bar): notes, pen, lines, arrows, rectangles and ellipses on a canvas, with a select tool to move things around. One pad per project, saved automatically.\n- Claude Code usage in the status bar while Claude Code runs: context window, 5-hour and weekly limits. Hover for reset times.\n- Editor: wrap long lines (Alt+Z or the wrap button).\n- Settings \u003e Panes: choose whether the Explorer, Editor and Scratchpad are open when a window opens.\n- SplitView now checks for updates at launch and can install them in place.\n- Cleaner top bar: the command palette box sits in the centre."
 }

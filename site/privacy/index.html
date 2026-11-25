@@ -21,18 +21,24 @@
 <main id="main" class="wrap">
   <article class="doc">
     <h1>Privacy</h1>
-    <p class="meta">Last updated November 17, 2026 · covers SplitView 0.4.0 and this website</p>
+    <p class="meta">Last updated November 25, 2026 · covers SplitView 0.5.0 and this website</p>
     <p>SplitView has no accounts, no analytics and no telemetry. The app doesn't send your data to us, and we don't run a server that could receive it.</p>
 
     <h2>The app</h2>
-    <p>SplitView doesn't record what you type or what your terminals print. Scrollback is held in memory and goes away when you close the pane. The app doesn't check for updates or contact any service of ours.</p>
+    <p>SplitView doesn't record what you type or what your terminals print. Scrollback is held in memory and goes away when you close the pane.</p>
+    <p>Each time it starts, SplitView reads <code>splitview.pages.dev/releases/latest.json</code> to see whether a newer version is out. If you choose to update, the installer is downloaded from the project's GitHub releases and checked against the published size and SHA-256 before it runs. These requests carry the app's version but nothing about you or your files.</p>
     <p>These are stored on your computer only, in <code>%APPDATA%\splitview</code> on Windows:</p>
     <ul>
       <li><strong>Settings</strong> (<code>settings.json</code>): colors, font size, aliases, banner text, prompt options, your default shell and panel widths.</li>
       <li><strong>Configuration</strong> (<code>config.toml</code>), if you create one.</li>
       <li><strong>Files you open in the editor</strong>, which are read from and saved to your own disk.</li>
+      <li><strong>Scratchpads</strong> (<code>scratchpads\</code>): your notes and drawings, one file per project, named after a hash of the project's folder. Delete the folder to remove them.</li>
     </ul>
     <p>Programs you run inside SplitView, such as <code>git</code> or <code>npm</code>, make their own network connections. Those are outside SplitView's control.</p>
+
+    <h2>Claude Code usage</h2>
+    <p>When Claude Code is running on your computer, SplitView shows its usage in the status bar. To do that it reads Claude Code's own files in <code>~\.claude</code>: the list of running sessions and the end of each session's transcript, for the context size. It doesn't copy or keep them.</p>
+    <p>For the 5-hour and weekly limits it sends the access token from Claude Code's <code>.credentials.json</code> to Anthropic (<code>api.anthropic.com</code>), the company that issued it, about every two minutes while a session runs. The token goes nowhere else and isn't stored by SplitView. If Claude Code isn't running, none of this happens.</p>
 
     <h2>Remote control</h2>
     <p>Remote control is off by default, and nothing listens on your network unless you turn it on in Settings. The phone app isn't available yet. When you enable the feature:</p>
@@ -54,7 +60,7 @@
 <footer class="foot">
   <div class="wrap">
     <a class="brand" href="/"><img src="/assets/img/icon.png" alt="" width="22" height="22">SplitView</a>
-    <span>0.4.0</span>
+    <span>0.5.0</span>
     <nav aria-label="Legal"><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></nav>
   </div>
 </footer>

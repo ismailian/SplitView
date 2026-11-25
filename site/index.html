@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SplitView: a keyboard-driven terminal with split panes</title>
-  <meta name="description" content="SplitView is a native, keyboard-driven terminal for Windows with tmux-style split panes, a file explorer that follows your shell, a built-in editor and a command palette. Free, 5.7 MB, version 0.4.0.">
+  <meta name="description" content="SplitView is a native, keyboard-driven terminal for Windows with tmux-style split panes, a file explorer that follows your shell, a built-in editor and a command palette. Free, 6.0 MB, version 0.5.0.">
   <meta property="og:title" content="SplitView: split, focus, zoom. Never reach for the mouse.">
   <meta property="og:description" content="A native terminal with tmux-style panes, a file explorer and an editor beside them.">
   <meta property="og:type" content="website">
@@ -38,7 +38,7 @@
   <div class="hero">
     <div class="wrap">
       <div class="hero-copy">
-        <span class="eyebrow"><span class="dot" aria-hidden="true"></span>v0.4.0 · git status in the Explorer · Windows</span>
+        <span class="eyebrow"><span class="dot" aria-hidden="true"></span>v0.5.0 · scratchpad &amp; Claude Code usage · Windows</span>
         <h1>Split, focus, zoom.<br><span class="accent">Never reach for the mouse.</span></h1>
         <p class="lede">SplitView is a terminal with tmux-style panes in a native window, with a file explorer that follows your shell and an editor beside it. Everything is one keystroke away.</p>
         <div class="cta">
@@ -51,7 +51,7 @@
             <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
           </a>
         </div>
-        <p class="cta-meta"><span>Free</span><span>5.7 MB</span><span>No admin rights</span><span>Windows 10 and 11, x64</span></p>
+        <p class="cta-meta"><span>Free</span><span>6.0 MB</span><span>No admin rights</span><span>Windows 10 and 11, x64</span></p>
       </div>
 
       <div class="window reveal">
@@ -80,7 +80,6 @@
         <div class="app">
           <div class="app-top">
             <img src="/assets/img/icon.png" alt="" width="16" height="16">
-            <span class="t">SplitView</span>
             <span class="app-tab">Git Bash</span>
             <span id="pane-count" class="hide-sm">1 pane</span>
           </div>
@@ -88,7 +87,7 @@
           <div class="app-status">
             <span class="shell">Git Bash</span>
             <span class="hide-sm">~/project</span>
-            <span class="right"><span id="prefix-badge" class="prefix-badge">Ctrl A prefix</span><span class="hide-sm">v0.4.0</span></span>
+            <span class="right"><span id="prefix-badge" class="prefix-badge">Ctrl A prefix</span><span class="hide-sm">v0.5.0</span></span>
           </div>
         </div>
         <div class="demo-side">
@@ -160,13 +159,23 @@
 
       <div class="feature reveal">
         <div class="feature-copy">
+          <h3>A scratchpad for every project</h3>
+          <p>Press <kbd>w</kbd> after the prefix and jot it down before it's gone: notes, pen strokes, lines, arrows, boxes and circles, in six colors. The select tool moves anything you've drawn.</p>
+          <p>Each project gets its own pad, picked from the git repository of the focused pane (or its folder), and every change is saved as you go. Open another project and you see its notes, not the last one's.</p>
+          <div class="keys-inline"><span><kbd>Enter</kbd> new note</span><span><kbd>p</kbd> pen</span><span><kbd>v</kbd> select</span><span><kbd>Ctrl</kbd><kbd>Z</kbd> undo</span></div>
+        </div>
+        <figure class="shot"><img src="/assets/img/scratchpad.webp" loading="lazy" width="524" height="440" alt="The scratchpad with a note titled Ideas, a box labelled parser with an arrow to an ellipse labelled emulator, and a purple pen stroke."></figure>
+      </div>
+
+      <div class="feature flip reveal">
+        <div class="feature-copy">
           <h3>Send a dev server to the background</h3>
           <p><kbd>b</kbd> hides a pane without stopping it. The process keeps running and its output keeps buffering. <kbd>Shift</kbd> <kbd>B</kbd> lists what's running with each pane's latest line, so you can bring one back or stop it.</p>
         </div>
         <figure class="shot flat"><img src="/assets/img/background.webp" loading="lazy" width="750" height="193" alt="The backgrounded panes picker listing a Git Bash pane whose latest line is a Vite dev server URL."></figure>
       </div>
 
-      <div class="feature flip reveal">
+      <div class="feature reveal">
         <div class="feature-copy">
           <h3>Make it look like yours</h3>
           <p>Settings (<kbd>,</kbd> after the prefix) has five palettes to start from, every color, font size and divider thickness, aliases for every shell, a startup banner, and which details the prompt shows.</p>
@@ -174,7 +183,7 @@
         <figure class="shot flat"><img src="/assets/img/display.webp" loading="lazy" width="1040" height="720" alt="The Display settings with the Wire, Parrot, Midnight, Carbon and Matrix palettes, color fields, font size and divider thickness."></figure>
       </div>
 
-      <div class="feature reveal">
+      <div class="feature flip reveal">
         <div class="feature-copy">
           <h3>Remote control, off until you say so</h3>
           <p>SplitView includes an encrypted server that lets a paired phone watch and type into your panes. Pairing takes a one-time code and your approval on the desktop, and the certificate is pinned.</p>
@@ -226,6 +235,21 @@
           <h3>Quiet when idle</h3>
           <p>No webview, no blinking, no polling. When nothing changes, SplitView draws nothing and uses next to no CPU.</p>
         </div>
+        <div class="card">
+          <div class="icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/><path d="m5.6 5.6 2.1 2.1"/><path d="m16.3 16.3 2.1 2.1"/><path d="m5.6 18.4 2.1-2.1"/><path d="m16.3 7.7 2.1-2.1"/></svg></div>
+          <h3>Claude Code usage at a glance</h3>
+          <p>While Claude Code runs, the status bar shows its context window and your 5-hour and weekly limits. Hover for when they reset.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><line x1="3" x2="21" y1="6" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" x2="10" y1="18" y2="18"/></svg></div>
+          <h3>Wrap long lines</h3>
+          <p>The editor wraps long lines when you want it to. <kbd>Alt</kbd> <kbd>Z</kbd> toggles it, and it stays the way you left it.</p>
+        </div>
+        <div class="card">
+          <div class="icon"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/></svg></div>
+          <h3>Start with your panels</h3>
+          <p>Settings &rsaquo; Panes chooses whether the Explorer, Editor and Scratchpad are open when a window opens.</p>
+        </div>
       </div>
     </div>
   </section>
@@ -265,6 +289,7 @@
           <dl>
             <div><dt>Explorer</dt><dd><kbd>e</kbd></dd></div>
             <div><dt>Editor</dt><dd><kbd>Shift</kbd><kbd>E</kbd></dd></div>
+            <div><dt>Scratchpad</dt><dd><kbd>w</kbd></dd></div>
             <div><dt>Settings</dt><dd><kbd>,</kbd></dd></div>
             <div><dt>Shell picker</dt><dd><kbd>p</kbd></dd></div>
             <div><dt>New window</dt><dd><kbd>n</kbd></dd></div>
@@ -290,15 +315,15 @@
       <div class="get reveal">
         <div class="get-main">
           <span class="kicker">Download</span>
-          <h2>SplitView 0.4.0 for Windows</h2>
+          <h2>SplitView 0.5.0 for Windows</h2>
           <p>A per-user install: no admin rights, and it replaces a 0.2.x install in place.</p>
-          <a class="btn btn-primary" href="https://github.com/ismailian/SplitView/releases/download/v0.4.0/SplitView_0.4.0_x64-setup.exe">
+          <a class="btn btn-primary" href="https://github.com/ismailian/SplitView/releases/download/v0.5.0/SplitView_0.5.0_x64-setup.exe">
             <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
             Download the installer
           </a>
           <div class="file">
-            <span>SplitView_0.4.0_x64-setup.exe · 5.7 MB · Windows 10 and 11, x64</span>
-            <span class="hash">SHA-256 <code id="hash">c4070184bf556e9e0d24c11b6c7aa1360b012e253b8e8c2be7b57670d0959142</code> <button type="button" class="copy" id="copy-hash">Copy</button></span>
+            <span>SplitView_0.5.0_x64-setup.exe · 6.0 MB · Windows 10 and 11, x64</span>
+            <span class="hash">SHA-256 <code id="hash">7f3eca01e1c96f7c133b38ceb06f7fe0aa91dd046f7b007c685970002b086706</code> <button type="button" class="copy" id="copy-hash">Copy</button></span>
           </div>
         </div>
         <div class="get-side">
@@ -318,7 +343,7 @@
 <footer class="foot">
   <div class="wrap">
     <a class="brand" href="/"><img src="/assets/img/icon.png" alt="" width="22" height="22">SplitView</a>
-    <span>0.4.0 · made for the keyboard</span>
+    <span>0.5.0 · made for the keyboard</span>
     <nav aria-label="Legal"><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></nav>
   </div>
 </footer>
