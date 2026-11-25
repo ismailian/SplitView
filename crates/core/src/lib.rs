@@ -9,6 +9,7 @@
 //! * [`editor`], [`highlight`] — the editor panel's model and syntax colouring
 //! * [`fuzzy`] — command palette matching
 //! * [`git`] — `git status` parsing for the sidebar
+//! * [`update`] — the update manifest (`releases/latest.json`) and version order
 
 pub mod config;
 pub mod editor;
@@ -21,3 +22,4 @@ pub mod osc;
 pub mod paths;
 pub mod quote;
 pub mod tree;
+pub mod update;

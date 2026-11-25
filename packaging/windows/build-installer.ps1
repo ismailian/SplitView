@@ -2,7 +2,10 @@
 #   release build -> sign splitview.exe -> Inno Setup -> sign the installer.
 # Signing is skipped (with a warning) unless an identity is configured; see
 # sign-windows.ps1. Run from anywhere:  powershell -File packaging\windows\build-installer.ps1
-param([switch]$SkipBuild)
+# Also writes site\releases\latest.json, which the in-app update check reads:
+# -Changelog <file> holds the plain-text notes shown in the update prompt. Attach
+# the installer to the GitHub release vX.Y.Z before deploying the site.
+param([switch]$SkipBuild, [string]$Changelog)
 $ErrorActionPreference = 'Stop'
 $root = Resolve-Path "$PSScriptRoot\..\.."
 $version = (Select-String -Path "$root\Cargo.toml" -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
@@ -38,3 +41,16 @@ if ($LASTEXITCODE) { throw "signing the installer failed" }
 $item = Get-Item $setup
 $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
 "{0}  {1:N1} MB  sha256 {2}" -f $item.FullName, ($item.Length / 1MB), $hash
+
+$manifest = [ordered]@{
+    version   = $version
+    url       = "https://github.com/ismailian/SplitView/releases/download/v$version/$($item.Name)"
+    size      = $item.Length
+    sha256    = $hash
+    changelog = if ($Changelog) { (Get-Content $Changelog -Raw).Trim() } else { '' }
+}
+$json = "$root\site\releases\latest.json"
+New-Item -ItemType Directory -Force (Split-Path $json) | Out-Null
+# No BOM: serde_json rejects one.
+[IO.File]::WriteAllText($json, ($manifest | ConvertTo-Json) + "`n", (New-Object Text.UTF8Encoding $false))
+"wrote $json"

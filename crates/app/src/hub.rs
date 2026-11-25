@@ -57,6 +57,12 @@ pub enum UiEvent {
     FilePicked(Option<String>),
     /// Remote control wants something from the UI.
     Remote(RemoteUi),
+    /// A newer release is out (`update.rs`).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    UpdateAvailable(Box<sv_core::update::Release>),
+    /// Downloading or starting the installer failed.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    UpdateFailed(String),
 }
 
 /// A PTY's output fan-out to remote subscribers (the local terminal is fed

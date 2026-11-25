@@ -46,6 +46,8 @@ pub enum Modal {
         focus: bool,
     },
     Settings(Box<SettingsState>),
+    /// A newer release: Download / Close.
+    Update(Box<sv_core::update::Release>),
 }
 
 impl Modal {
@@ -220,6 +222,64 @@ fn confirm(
     ans
 }
 
+/// "SplitView x.y.z is available": the changelog, Download / Close.
+fn update_prompt(ctx: &egui::Context, rel: &sv_core::update::Release) -> Option<Answer> {
+    let (keys, _) = crate::keys::take_all(ctx);
+    let mut ans = None;
+    for (k, _) in keys {
+        match k {
+            Key::Enter => ans = Some(Answer::Yes),
+            Key::Escape => ans = Some(Answer::No),
+            _ => {}
+        }
+    }
+    dialog(ctx, "update", 480.0, |ui| {
+        title_row(
+            ui,
+            ph::DOWNLOAD_SIMPLE,
+            &format!("SplitView {} is available", rel.version),
+        );
+        Frame::NONE
+            .inner_margin(Margin::symmetric(16, 12))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "You have {}. The installer is {:.1} MB; SplitView closes while it runs.",
+                        theme::VERSION,
+                        rel.size as f64 / (1024.0 * 1024.0)
+                    ))
+                    .color(TX1),
+                );
+                if !rel.changelog.trim().is_empty() {
+                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(240.0)
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(RichText::new(rel.changelog.trim()).color(TX2));
+                        });
+                }
+            });
+        w::hline(ui);
+        Frame::NONE
+            .fill(BG2)
+            .inner_margin(Margin::symmetric(14, 9))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if w::primary(ui, "Download").clicked() {
+                        ans = Some(Answer::Yes);
+                    }
+                    if ui.button("Close").clicked() {
+                        ans = Some(Answer::No);
+                    }
+                    ui.label(w::faint("Enter to download · Esc to close"));
+                });
+            });
+    });
+    ans
+}
+
 impl App {
     pub fn show_overlays(&mut self, ctx: &egui::Context, wi: usize) {
         if !self.pairing.is_empty() && wi == self.active_window() {
@@ -352,6 +412,16 @@ impl App {
             }
             Modal::Palette { query, sel, focus } => self.palette(ctx, wi, query, sel, focus),
             Modal::Settings(state) => self.settings_window(ctx, wi, state),
+            Modal::Update(rel) => match update_prompt(ctx, rel) {
+                Some(Answer::Yes) => {
+                    #[cfg(windows)]
+                    crate::update::install(self.hub.clone(), (**rel).clone());
+                    self.toast(format!("Downloading SplitView {}…", rel.version), false);
+                    false
+                }
+                Some(Answer::No) => false,
+                None => true,
+            },
         };
         // An action run from the modal may have opened another one.
         if keep && self.modal.is_none() {

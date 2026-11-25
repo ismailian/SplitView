@@ -67,6 +67,7 @@ The visual language follows SecureWire (`../SecureWire`): IDE-style frame with a
 | File dialog | **rfd 0.16** | `Ctrl+Shift+O`, on a worker thread. |
 | Config | **toml 1** + **serde_json** | `config.toml` (hand-edited), `settings.json` (Settings window). |
 | Remote control | **tokio + tokio-tungstenite + tokio-rustls/rustls (ring) + rcgen + mdns-sd + qrcode** | Opt-in, §21. `ring` is pinned: `aws-lc-rs` needs cmake + nasm. |
+| Update check | **ureq 3** (rustls/ring, Windows only) | `update.rs`: once per launch, reads `site/releases/latest.json`; installer comes from the GitHub release, verified by size + SHA-256. |
 | Font | **JetBrains Mono NL** (bundled, OFL) | `fontFile` in config.toml overrides it for the terminal. |
 
 **Platforms:** Windows, Linux, macOS. A POSIX shell is the default everywhere it
@@ -141,6 +142,7 @@ splitview/
 │   │   ├── editor.rs          ← EOL/BOM round trip, indent, minimal change, find
 │   │   ├── highlight.rs       ← one-pass syntax highlighter (per-language table)
 │   │   ├── git.rs             ← `git status --porcelain=v2` parser, row lookup
+│   │   ├── update.rs          ← update manifest, version order, URL/size/hash checks
 │   │   └── fuzzy.rs           ← command-palette matching
 │   ├── term/  splitview-term (lib sv_term)
 │   │   ├── lib.rs             ← Terminal, preview_line, url_at
@@ -169,6 +171,7 @@ splitview/
 │       ├── git.rs             ← runs `git status` for the sidebar (TESTED)
 │       ├── store.rs           ← config dir paths, config.toml loading
 │       ├── shot.rs            ← --shot scenes + PNG writer
+│       ├── update.rs          ← launch-time update check, installer download/run (Windows)
 │       └── remote/            ← remote control (§21)
 ├── packaging/
 │   ├── icons/                 ← splitview.ico/.png

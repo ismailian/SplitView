@@ -11,9 +11,6 @@ target/
 dist/
 
 
-# Website installer downloads
-site/downloads/
-
 # Environment files
 .env
 .env.*
@@ -31,3 +28,6 @@ Desktop.ini
 .idea
 *.suo
 *.sw?
+
+# graphify knowledge graph output
+graphify-out/

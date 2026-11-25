@@ -10,6 +10,5 @@
 /assets/img/*
   Cache-Control: public, max-age=604800
 
-/downloads/*
-  Content-Disposition: attachment
-  Cache-Control: public, max-age=3600
+/releases/*
+  Cache-Control: public, max-age=300

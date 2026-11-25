@@ -112,6 +112,8 @@ pub struct App {
     pub pairing: Vec<PairingRequest>,
     pub remote_status: RemoteStatus,
     pub toast: Option<Toast>,
+    /// A release the update checker found, shown once no other modal is open.
+    pending_update: Option<Box<sv_core::update::Release>>,
     /// No shell could be started at all: say so instead of an empty window.
     pub startup_error: Option<String>,
     roster_dirty: bool,
@@ -154,6 +156,7 @@ impl App {
             modal: None,
             pairing: Vec::new(),
             toast: None,
+            pending_update: None,
             startup_error: None,
             roster_dirty: true,
             last_publish: Instant::now(),
@@ -173,6 +176,10 @@ impl App {
             app.toast(e, true);
         }
         app.first_pane(None);
+        #[cfg(windows)]
+        if app.shot.is_none() {
+            crate::update::check(app.hub.clone());
+        }
         if app.settings.remote.enable_at_startup {
             let cfg = app.settings.remote.config();
             if let Err(e) = app.hub.remote.enable(&app.hub, cfg) {
@@ -818,7 +825,16 @@ impl App {
                 }
                 UiEvent::FilePicked(None) => {}
                 UiEvent::Remote(r) => self.remote_event(r),
+                UiEvent::UpdateAvailable(r) => self.pending_update = Some(r),
+                UiEvent::UpdateFailed(e) => self.toast(format!("Update failed: {e}"), true),
             }
+        }
+        if self.modal.is_none()
+            && self.pairing.is_empty()
+            && let Some(r) = self.pending_update.take()
+        {
+            let key = self.windows[self.active_window()].key;
+            self.modal = Some((key, Modal::Update(r)));
         }
     }
 

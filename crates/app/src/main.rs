@@ -23,6 +23,8 @@ mod shot;
 mod sidebar;
 mod store;
 mod theme;
+#[cfg(windows)]
+mod update;
 mod watch;
 mod widgets;
 
