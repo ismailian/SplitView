@@ -62,6 +62,7 @@ pub enum Focus {
     Terminal,
     Sidebar,
     Editor,
+    Scratch,
 }
 
 /// One window: a layout of panes with its own sidebar and editor.
@@ -78,6 +79,7 @@ pub struct Workspace {
     pub focus: Focus,
     pub sidebar: Sidebar,
     pub editor: Editor,
+    pub scratch_open: bool,
     /// Monotonic, bumped when the window gains focus (remote target window).
     pub focused_at: f64,
     /// Close this (secondary) window at the end of the frame.
@@ -99,6 +101,10 @@ pub struct App {
     next_window: u64,
     pub settings: Settings,
     settings_path: PathBuf,
+    /// Every project's scratchpad (shared by the windows).
+    pub scratch: crate::scratchpad::Scratchpad,
+    /// Running Claude Code sessions and the account's limits.
+    pub claude: crate::claude::Usage,
     pub config: Config,
     config_path: PathBuf,
     pub keymap: Keymap,
@@ -165,6 +171,8 @@ impl App {
             quit_confirmed: false,
             frame_stats: std::env::var_os("SPLITVIEW_FRAME_STATS")
                 .map(|p| (p.into(), Instant::now(), 0)),
+            scratch: crate::scratchpad::Scratchpad::new(paths.scratch, settings.ui.scratch_width),
+            claude: Default::default(),
             settings,
             settings_path: paths.settings,
             config,
@@ -179,6 +187,9 @@ impl App {
         #[cfg(windows)]
         if app.shot.is_none() {
             crate::update::check(app.hub.clone());
+        }
+        if app.shot.is_none() {
+            crate::claude::watch(&app.hub);
         }
         if app.settings.remote.enable_at_startup {
             let cfg = app.settings.remote.config();
@@ -197,6 +208,24 @@ impl App {
     ) -> Workspace {
         let key = self.next_window;
         self.next_window += 1;
+        // Detached panes are small single-pane windows: no side panels there.
+        let defaults = if from.is_none() {
+            self.settings.panes
+        } else {
+            Default::default()
+        };
+        let mut sidebar = Sidebar::new(
+            key,
+            self.settings.ui.sidebar_width,
+            self.settings.ui.show_hidden,
+        );
+        sidebar.set_open(defaults.explorer, &self.hub);
+        let mut editor = Editor::new(
+            self.settings.ui.editor_width,
+            self.settings.ui.editor_wrap,
+            &self.hub,
+        );
+        editor.open = defaults.editor;
         Workspace {
             key,
             label,
@@ -205,12 +234,9 @@ impl App {
             layout: Layout::default(),
             background: Vec::new(),
             focus: Focus::Terminal,
-            sidebar: Sidebar::new(
-                key,
-                self.settings.ui.sidebar_width,
-                self.settings.ui.show_hidden,
-            ),
-            editor: Editor::new(self.settings.ui.editor_width, &self.hub),
+            sidebar,
+            editor,
+            scratch_open: defaults.scratchpad,
             focused_at: 0.0,
             closing: false,
         }
@@ -508,14 +534,14 @@ impl App {
 
     pub fn persist_widths(&mut self) {
         if let Some(w) = self.windows.first() {
-            let (sw, ew, hidden) = (w.sidebar.width, w.editor.width, w.sidebar.show_hidden);
-            if (sw - self.settings.ui.sidebar_width).abs() > 0.5
-                || (ew - self.settings.ui.editor_width).abs() > 0.5
-                || hidden != self.settings.ui.show_hidden
-            {
-                self.settings.ui.sidebar_width = sw;
-                self.settings.ui.editor_width = ew;
-                self.settings.ui.show_hidden = hidden;
+            let mut ui = self.settings.ui.clone();
+            ui.sidebar_width = w.sidebar.width;
+            ui.editor_width = w.editor.width;
+            ui.show_hidden = w.sidebar.show_hidden;
+            ui.editor_wrap = w.editor.wrap;
+            ui.scratch_width = self.scratch.width;
+            if ui != self.settings.ui {
+                self.settings.ui = ui;
                 self.save_settings();
             }
         }
@@ -623,6 +649,16 @@ impl App {
                     w.editor.open = true;
                     w.focus = Focus::Editor;
                     w.editor.request_focus = true;
+                }
+            }
+            "toggle_scratchpad" => {
+                if w.scratch_open && w.focus == Focus::Scratch {
+                    w.scratch_open = false;
+                    w.focus = Focus::Terminal;
+                } else {
+                    w.scratch_open = true;
+                    w.focus = Focus::Scratch;
+                    self.scratch.request_focus = true;
                 }
             }
             "open_settings" => {
@@ -825,6 +861,7 @@ impl App {
                 }
                 UiEvent::FilePicked(None) => {}
                 UiEvent::Remote(r) => self.remote_event(r),
+                UiEvent::Claude(u) => self.claude = *u,
                 UiEvent::UpdateAvailable(r) => self.pending_update = Some(r),
                 UiEvent::UpdateFailed(e) => self.toast(format!("Update failed: {e}"), true),
             }
@@ -1088,7 +1125,7 @@ impl App {
                         modifiers: egui::Modifiers::CTRL,
                     })
                 }),
-                Focus::Sidebar => {}
+                Focus::Sidebar | Focus::Scratch => {}
             }
         }
         if let Some(deadline) = self.keymap.prefix_deadline() {
@@ -1209,6 +1246,9 @@ impl eframe::App for App {
                 }
             }
         }
+        if let Some(e) = self.scratch.autosave(&ctx) {
+            self.toast(e, true);
+        }
         self.publish_roster(false);
         if self.remote_status.enabled && !self.remote_status.sessions.is_empty() {
             ctx.request_repaint_after(Duration::from_secs(2));
@@ -1229,6 +1269,7 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.persist_widths();
+        let _ = self.scratch.flush();
         let _ = self.hub.remote.disable(&self.hub);
         self.hub.close_all();
     }

@@ -127,6 +127,7 @@ impl Default for KeymapConfig {
                 ("n", "new_window"),
                 ("e", "toggle_sidebar"),
                 ("S-e", "toggle_editor"),
+                ("w", "toggle_scratchpad"),
                 ("r", "reload_config"),
                 (",", "open_settings"),
                 ("p", "pick_shell"),
@@ -341,6 +342,7 @@ pub const ACTIONS: &[(&str, &str, &str)] = &[
     ("new_window", "Open a new window", "App"),
     ("toggle_sidebar", "Toggle file sidebar", "App"),
     ("toggle_editor", "Toggle editor panel", "App"),
+    ("toggle_scratchpad", "Toggle scratchpad", "App"),
     (
         "pick_shell",
         "Pick a shell (open a pane / set default)",

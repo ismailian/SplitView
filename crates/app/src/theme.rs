@@ -49,6 +49,20 @@ pub const PANE_HEADER_H: f32 = 24.0;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Scratchpad ink, indexed by `sv_core::scratch::Item`'s `color`.
+pub const INK: [egui::Color32; 6] = [TX0, ACC, INFO, WARN, ERR, PURPLE];
+
+/// Usage meter colour: accent, then warn from 70 %, err from 90 %.
+pub fn level(frac: f32) -> egui::Color32 {
+    if frac >= 0.9 {
+        ERR
+    } else if frac >= 0.7 {
+        WARN
+    } else {
+        ACC
+    }
+}
+
 pub fn visuals() -> Visuals {
     let mut v = Visuals::dark();
     v.panel_fill = BG1;

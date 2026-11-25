@@ -9,9 +9,9 @@ description = "A minimalistic, keyboard-driven terminal emulator with tmux-style
 name = "splitview"
 path = "src/main.rs"
 
-# Update checker (update.rs): Windows only, the site ships only a Windows installer.
+# Process liveness for the Claude usage meters (claude.rs).
 [target.'cfg(windows)'.dependencies]
-ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
@@ -27,6 +27,8 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 dirs.workspace = true
+# Update checker (Windows) and the Claude usage limits (claude.rs).
+ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 portable-pty = "0.8"
 notify = "8"
 rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "tokio"] }

@@ -165,6 +165,12 @@ pub fn drive(app: &mut App, ctx: &egui::Context) {
                     app.modal = Some((key, Modal::Background { sel: 0 }));
                 }
                 "zoom" => app.run_action(0, "toggle_zoom"),
+                "scratch" => {
+                    app.run_action(0, "toggle_scratchpad");
+                    let cwd = app.focused_pane(0).and_then(|p| p.cwd.clone());
+                    app.scratch.demo(cwd.as_deref());
+                    app.claude = crate::claude::Usage::demo(cwd.unwrap_or_default());
+                }
                 _ => {}
             }
             next(app);

@@ -53,8 +53,8 @@ struct Tab {
     /// What was last seen on disk (may differ from `stamp` while dirty).
     disk_stamp: Option<FileStamp>,
     gone: bool,
-    /// (text hash, font size, galley) of the last layout.
-    galley: Option<(u64, f32, Arc<Galley>)>,
+    /// (text hash, font size, wrap width, galley) of the last layout.
+    galley: Option<(u64, f32, f32, Arc<Galley>)>,
     line: usize,
     col: usize,
     /// Scroll so this line is visible next frame.
@@ -75,6 +75,8 @@ pub struct Editor {
     pub open: bool,
     pub width: f32,
     pub request_focus: bool,
+    /// Wrap long lines to the panel width (Alt+Z).
+    pub wrap: bool,
     tabs: Vec<Tab>,
     active: usize,
     find: Find,
@@ -121,7 +123,7 @@ fn text_id(i: &str) -> Id {
 }
 
 impl Editor {
-    pub fn new(width: f32, hub: &Arc<crate::hub::Hub>) -> Self {
+    pub fn new(width: f32, wrap: bool, hub: &Arc<crate::hub::Hub>) -> Self {
         let watch = Arc::new(parking_lot::Mutex::new(None));
         spawn_watcher(Arc::downgrade(&watch), Arc::downgrade(hub));
         Self {
@@ -129,6 +131,7 @@ impl Editor {
             open: false,
             width: width.max(MIN_WIDTH),
             request_focus: false,
+            wrap,
             tabs: Vec::new(),
             active: 0,
             find: Find::default(),
@@ -407,6 +410,9 @@ impl Editor {
             self.width = (self.width - 40.0).max(MIN_WIDTH);
             out.push(Action::Persist);
         }
+        if take(Modifiers::ALT, Key::Z) {
+            self.toggle_wrap(out);
+        }
         if take(ctrl, Key::F) || take(ctrl, Key::H) {
             self.find.open = true;
             self.find.focus = true;
@@ -437,6 +443,11 @@ impl Editor {
         }
     }
 
+    fn toggle_wrap(&mut self, out: &mut Vec<Action>) {
+        self.wrap = !self.wrap;
+        out.push(Action::Persist);
+    }
+
     fn tab_strip(&mut self, ui: &mut Ui, out: &mut Vec<Action>) {
         let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), TAB_H), Sense::hover());
         let p = ui.painter();
@@ -448,7 +459,7 @@ impl Editor {
         );
         let paths: Vec<&str> = self.tabs.iter().map(|t| t.path.as_str()).collect();
         let labels = tab_labels(&paths);
-        let tools_w = 84.0;
+        let tools_w = 108.0;
         let mut x = strip.left();
         let mut select = None;
         let mut close = None;
@@ -561,6 +572,16 @@ impl Editor {
         .clicked()
         {
             out.push(Action::Hide);
+        }
+        if w::icon_button(
+            &mut c,
+            ph::ARROW_BEND_DOWN_LEFT,
+            "Wrap long lines (Alt+Z)",
+            self.wrap,
+        )
+        .clicked()
+        {
+            self.toggle_wrap(out);
         }
         if w::icon_button(&mut c, ph::FLOPPY_DISK, "Save (Ctrl+S)", false).clicked()
             && let Some(a) = self.save(self.active, false)
@@ -718,7 +739,8 @@ impl Editor {
             0,
             BG1,
         );
-        let mut scroll = egui::ScrollArea::both()
+        let wrap = self.wrap;
+        let mut scroll = egui::ScrollArea::new([!wrap, true])
             .id_salt(("editor-scroll", &t.path))
             .auto_shrink([false, false]);
         if let Some(line) = t.scroll_to_line.take() {
@@ -727,12 +749,14 @@ impl Editor {
         }
         let lang = t.lang;
         let cache = &mut t.galley;
-        let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, _wrap: f32| -> Arc<Galley> {
+        let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap_w: f32| -> Arc<Galley> {
             let text = buf.as_str();
             let h = egui::util::hash(text);
-            if let Some((ch, cf, g)) = cache.as_ref()
+            let wrap_w = if wrap { wrap_w } else { f32::INFINITY };
+            if let Some((ch, cf, cw, g)) = cache.as_ref()
                 && *ch == h
                 && *cf == font.size
+                && *cw == wrap_w
             {
                 return g.clone();
             }
@@ -748,9 +772,9 @@ impl Editor {
                     },
                 );
             }
-            job.wrap.max_width = f32::INFINITY;
+            job.wrap.max_width = wrap_w;
             let g = ui.fonts_mut(|f| f.layout_job(job));
-            *cache = Some((h, font.size, g.clone()));
+            *cache = Some((h, font.size, wrap_w, g.clone()));
             g
         };
         let output = scroll

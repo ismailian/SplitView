@@ -18,6 +18,7 @@ use crate::widgets as w;
 pub enum Section {
     #[default]
     Display,
+    Panes,
     Keys,
     Aliases,
     Prompt,
@@ -29,6 +30,7 @@ pub enum Section {
 
 const SECTIONS: &[(Section, &str, &str)] = &[
     (Section::Display, ph::PALETTE, "Display"),
+    (Section::Panes, ph::SIDEBAR_SIMPLE, "Panes"),
     (Section::Keys, ph::KEYBOARD, "Keybindings"),
     (Section::Aliases, ph::ARROW_BEND_DOWN_RIGHT, "Aliases"),
     (Section::Prompt, ph::INFO, "Terminal info"),
@@ -188,6 +190,7 @@ impl App {
                                     ui.set_width(rest.x - 44.0);
                                     match st.section {
                                         Section::Display => self.section_display(ui),
+                                        Section::Panes => self.section_panes(ui),
                                         Section::Keys => self.section_keys(ui),
                                         Section::Aliases => self.section_aliases(ui),
                                         Section::Prompt => self.section_prompt(ui),
@@ -289,6 +292,42 @@ impl App {
             "Terminal font: JetBrains Mono (bundled). Set fontFile in {} to use another.",
             "config.toml"
         )));
+    }
+
+    fn section_panes(&mut self, ui: &mut Ui) {
+        heading(
+            ui,
+            "Panes",
+            "Which side panels a new window opens with. Each still toggles from the top bar or its key.",
+        );
+        let p = &mut self.settings.panes;
+        let row = |ui: &mut Ui, on: &mut bool, label: &str, key: &str| {
+            ui.horizontal(|ui| {
+                w::switch(ui, on, label);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    w::kbd(ui, key);
+                    ui.label(w::faint("prefix"));
+                });
+            });
+            ui.add_space(6.0);
+        };
+        row(ui, &mut p.explorer, "Explorer (files, left)", "e");
+        row(ui, &mut p.editor, "Editor (right)", "Shift E");
+        row(ui, &mut p.scratchpad, "Scratchpad (right)", "w");
+        ui.add_space(10.0);
+        heading(ui, "Editor", "");
+        let mut wrap = self.settings.ui.editor_wrap;
+        if w::switch(ui, &mut wrap, "Wrap long lines (Alt+Z in the editor)").changed() {
+            self.settings.ui.editor_wrap = wrap;
+            for win in &mut self.windows {
+                win.editor.wrap = wrap;
+            }
+        }
+        ui.add_space(10.0);
+        heading(ui, "Scratchpad", "");
+        ui.label(w::dim(
+            "One pad per project: the git work tree of the focused pane, else its folder.              Saved automatically next to settings.json, in scratchpads/.",
+        ));
     }
 
     fn section_keys(&mut self, ui: &mut Ui) {

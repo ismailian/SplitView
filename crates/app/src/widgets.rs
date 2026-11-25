@@ -149,3 +149,28 @@ pub fn primary(ui: &mut Ui, text: &str) -> Response {
             .stroke(Stroke::NONE),
     )
 }
+
+/// Status-bar usage meter: `ctx ▬▬▭ 57%`, coloured by level (`None`: no data).
+/// One allocation, so it lays out the same in either direction.
+pub fn meter(ui: &mut Ui, label: &str, frac: Option<f32>) -> Rect {
+    const BAR: f32 = 32.0;
+    let p = ui.painter();
+    let lg = p.layout_no_wrap(label.to_owned(), theme::prop(10.5), TX3);
+    let text = frac.map_or("–".to_owned(), |f| format!("{:.0}%", f * 100.0));
+    let color = frac.map_or(TX3, theme::level);
+    let vg = p.layout_no_wrap(text, theme::mono(10.5), TX1);
+    let wdt = lg.size().x + 5.0 + BAR + 5.0 + vg.size().x.max(24.0);
+    let (r, _) = ui.allocate_exact_size(vec2(wdt, theme::STATUS_H), Sense::hover());
+    let p = ui.painter();
+    let cy = r.center().y;
+    p.galley(pos2(r.left(), cy - lg.size().y / 2.0), lg.clone(), TX3);
+    let x = r.left() + lg.size().x + 5.0;
+    let track = Rect::from_min_size(pos2(x, cy - 2.0), vec2(BAR, 4.0));
+    p.rect_filled(track, 2, BG4);
+    if let Some(f) = frac {
+        let fill = Rect::from_min_size(track.min, vec2(BAR * f.clamp(0.0, 1.0), 4.0));
+        p.rect_filled(fill, 2, color);
+    }
+    p.galley(pos2(track.right() + 5.0, cy - vg.size().y / 2.0), vg, TX1);
+    r
+}

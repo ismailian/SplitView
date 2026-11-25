@@ -27,13 +27,10 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut Ui, wi: usize) {
         let mut actions: Vec<&'static str> = Vec::new();
+        let bar = ui.max_rect();
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            let version = format!("SplitView {}", theme::VERSION);
-            theme::logo(ui, 18.0).on_hover_text(&version);
-            ui.add_space(8.0);
-            ui.label(RichText::new("SplitView").color(TX0).strong())
-                .on_hover_text(version);
+            theme::logo(ui, 18.0).on_hover_text(format!("SplitView {}", theme::VERSION));
             ui.add_space(14.0);
 
             // The focused pane, like the active host tab in SecureWire.
@@ -66,94 +63,124 @@ impl App {
                     ui.label(w::faint(format!("{n} panes")));
                 }
             }
+            let left_end = ui.min_rect().right();
 
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                if w::icon_button(ui, ph::GEAR_SIX, "Settings (prefix ,)", false).clicked() {
-                    actions.push("open_settings");
-                }
-                // Remote indicator: only while the server is on.
-                let rs = &self.remote_status;
-                if rs.enabled {
-                    let live = !rs.sessions.is_empty();
-                    let tip = if live {
-                        format!("Remote control: {} live session(s)", rs.sessions.len())
-                    } else {
-                        "Remote control is on (no one connected)".to_owned()
-                    };
-                    let r = w::icon_button(ui, ph::BROADCAST, &tip, true);
-                    if live {
-                        ui.painter()
-                            .circle_filled(r.rect.right_top() + vec2(-5.0, 5.0), 3.0, WARN);
+            let right_start = ui
+                .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if w::icon_button(ui, ph::GEAR_SIX, "Settings (prefix ,)", false).clicked() {
+                        actions.push("open_settings");
                     }
-                    if r.clicked() {
-                        actions.push("open_settings_remote");
+                    // Remote indicator: only while the server is on.
+                    let rs = &self.remote_status;
+                    if rs.enabled {
+                        let live = !rs.sessions.is_empty();
+                        let tip = if live {
+                            format!("Remote control: {} live session(s)", rs.sessions.len())
+                        } else {
+                            "Remote control is on (no one connected)".to_owned()
+                        };
+                        let r = w::icon_button(ui, ph::BROADCAST, &tip, true);
+                        if live {
+                            ui.painter().circle_filled(
+                                r.rect.right_top() + vec2(-5.0, 5.0),
+                                3.0,
+                                WARN,
+                            );
+                        }
+                        if r.clicked() {
+                            actions.push("open_settings_remote");
+                        }
                     }
-                }
-                let bg = self.windows[wi].background.len();
-                if bg > 0 {
-                    let r = w::icon_button(
+                    let bg = self.windows[wi].background.len();
+                    if bg > 0 {
+                        let r = w::icon_button(
+                            ui,
+                            ph::STACK,
+                            &format!("{bg} backgrounded pane(s) — prefix Shift+B"),
+                            true,
+                        );
+                        ui.painter().text(
+                            r.rect.right_top() + vec2(-4.0, 5.0),
+                            Align2::CENTER_CENTER,
+                            bg.to_string(),
+                            theme::prop(9.0),
+                            WARN,
+                        );
+                        if r.clicked() {
+                            actions.push("show_background");
+                        }
+                    }
+                    ui.add_space(6.0);
+                    let w = &self.windows[wi];
+                    if w::icon_button(ui, ph::NOTE_PENCIL, "Scratchpad (prefix w)", w.scratch_open)
+                        .clicked()
+                    {
+                        actions.push("toggle_scratchpad");
+                    }
+                    if w::icon_button(ui, ph::CODE, "Editor (prefix Shift+E)", w.editor.open)
+                        .clicked()
+                    {
+                        actions.push("toggle_editor");
+                    }
+                    if w::icon_button(
                         ui,
-                        ph::STACK,
-                        &format!("{bg} backgrounded pane(s) — prefix Shift+B"),
-                        true,
-                    );
-                    ui.painter().text(
-                        r.rect.right_top() + vec2(-4.0, 5.0),
-                        Align2::CENTER_CENTER,
-                        bg.to_string(),
-                        theme::prop(9.0),
-                        WARN,
-                    );
-                    if r.clicked() {
-                        actions.push("show_background");
-                    }
-                }
-                ui.add_space(6.0);
-                let w = &self.windows[wi];
-                if w::icon_button(ui, ph::CODE, "Editor (prefix Shift+E)", w.editor.open).clicked()
-                {
-                    actions.push("toggle_editor");
-                }
-                if w::icon_button(
-                    ui,
-                    ph::ARROWS_OUT_SIMPLE,
-                    "Zoom pane (prefix z)",
-                    w.layout.zoomed.is_some(),
-                )
-                .clicked()
-                {
-                    actions.push("toggle_zoom");
-                }
-                if w::icon_button(
-                    ui,
-                    ph::SQUARE_SPLIT_VERTICAL,
-                    "Split down (prefix -)",
-                    false,
-                )
-                .clicked()
-                {
-                    actions.push("split_down");
-                }
-                if w::icon_button(
-                    ui,
-                    ph::SQUARE_SPLIT_HORIZONTAL,
-                    "Split right (prefix \\)",
-                    false,
-                )
-                .clicked()
-                {
-                    actions.push("split_right");
-                }
-                if w::icon_button(ui, ph::TREE_STRUCTURE, "Files (prefix e)", w.sidebar.open)
+                        ph::ARROWS_OUT_SIMPLE,
+                        "Zoom pane (prefix z)",
+                        w.layout.zoomed.is_some(),
+                    )
                     .clicked()
-                {
-                    actions.push("toggle_sidebar_click");
+                    {
+                        actions.push("toggle_zoom");
+                    }
+                    if w::icon_button(
+                        ui,
+                        ph::SQUARE_SPLIT_VERTICAL,
+                        "Split down (prefix -)",
+                        false,
+                    )
+                    .clicked()
+                    {
+                        actions.push("split_down");
+                    }
+                    if w::icon_button(
+                        ui,
+                        ph::SQUARE_SPLIT_HORIZONTAL,
+                        "Split right (prefix \\)",
+                        false,
+                    )
+                    .clicked()
+                    {
+                        actions.push("split_right");
+                    }
+                    if w::icon_button(ui, ph::TREE_STRUCTURE, "Files (prefix e)", w.sidebar.open)
+                        .clicked()
+                    {
+                        actions.push("toggle_sidebar_click");
+                    }
+                    ui.min_rect().left()
+                })
+                .inner;
+
+            // The command palette, as a search box centred on the window; when
+            // the sides crowd it, centred in the gap between them.
+            let (cx, gap) = (bar.center().x, 12.0);
+            let mut half = 190.0f32
+                .min(cx - left_end - gap)
+                .min(right_start - cx - gap);
+            let mut center = cx;
+            if half < 100.0 {
+                center = (left_end + right_start) / 2.0;
+                half = 190.0f32.min((right_start - left_end) / 2.0 - gap);
+            }
+            if half >= 60.0 {
+                let r =
+                    Rect::from_center_size(pos2(center, bar.center().y), vec2(half * 2.0, 24.0));
+                let width = r.width();
+                let resp = ui.interact(r, Id::new(("palette-box", wi)), Sense::click());
+                if resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
-                ui.add_space(12.0);
-                // The command palette, as a search box.
-                let width = (ui.available_width() - 24.0).clamp(140.0, 380.0);
-                let (r, resp) = ui.allocate_exact_size(vec2(width, 24.0), Sense::click());
                 let p = ui.painter();
                 p.rect_filled(r, 3, BG1);
                 p.rect_stroke(
@@ -181,7 +208,7 @@ impl App {
                 if resp.clicked() {
                     actions.push("command_palette");
                 }
-            });
+            }
         });
         for a in actions {
             match a {
@@ -272,6 +299,7 @@ impl App {
                 ui.add_space(10.0);
                 ui.label(small(format!("v{}", theme::VERSION), TX3));
                 ui.add_space(10.0);
+                self.claude_meters(ui, wi);
                 if self.remote_status.enabled {
                     let n = self.remote_status.sessions.len();
                     let (t, c) = if n > 0 {
@@ -297,6 +325,7 @@ impl App {
                     Focus::Terminal => "terminal",
                     Focus::Sidebar => "files",
                     Focus::Editor => "editor",
+                    Focus::Scratch => "scratchpad",
                 };
                 item(ui, small(format!("focus: {focus}"), TX3));
             });
@@ -320,6 +349,20 @@ impl App {
                 });
             self.sidebar_actions(wi, actions);
         }
+        if self.windows[wi].scratch_open {
+            let width = self.scratch.width;
+            let focused = self.windows[wi].focus == Focus::Scratch && !modal;
+            let cwd = self.focused_pane(wi).and_then(|p| p.cwd.clone());
+            let mut actions = Vec::new();
+            egui::Panel::right(Id::new(("scratch", key)))
+                .exact_size(width)
+                .resizable(false)
+                .frame(Frame::NONE.fill(BG1))
+                .show(ui, |ui| {
+                    actions = self.scratch.show(ui, cwd.as_deref(), focused, !modal);
+                });
+            self.scratch_actions(wi, actions);
+        }
         if self.windows[wi].editor.open {
             let width = self.windows[wi].editor.width;
             let focused = self.windows[wi].focus == Focus::Editor && !modal;
@@ -334,6 +377,122 @@ impl App {
                 });
             self.editor_actions(wi, actions);
         }
+    }
+
+    pub fn scratch_actions(&mut self, wi: usize, actions: Vec<crate::scratchpad::Action>) {
+        use crate::scratchpad::Action;
+        for a in actions {
+            match a {
+                Action::Leave => self.windows[wi].focus = Focus::Terminal,
+                Action::Focus => self.windows[wi].focus = Focus::Scratch,
+                Action::Hide => {
+                    self.windows[wi].scratch_open = false;
+                    self.windows[wi].focus = Focus::Terminal;
+                }
+                Action::Toast(t, err) => self.toast(t, err),
+                Action::Persist => self.persist_widths(),
+            }
+        }
+    }
+
+    /// Claude Code's context / 5-hour / weekly use, only while it runs. Shows
+    /// the session in the focused pane's directory, else the latest active.
+    fn claude_meters(&self, ui: &mut Ui, wi: usize) {
+        let u = &self.claude;
+        let cwd = self.focused_pane(wi).and_then(|p| p.cwd.as_deref());
+        let norm = |a: &str| a.replace('\\', "/").trim_end_matches('/').to_lowercase();
+        let Some(s) = cwd
+            .and_then(|c| u.sessions.iter().find(|s| norm(&s.cwd) == norm(c)))
+            .or(u.sessions.first())
+        else {
+            return;
+        };
+        let pct = |l: Option<crate::claude::Limit>| l.map(|l| l.percent / 100.0);
+        let ctx = s.context.map(|(n, w)| n as f32 / w as f32);
+        // Right to left: weekly, 5-hour, context, then the mark.
+        let mut area = w::meter(ui, "wk", pct(u.seven_day));
+        ui.add_space(10.0);
+        area = area.union(w::meter(ui, "5h", pct(u.five_hour)));
+        ui.add_space(10.0);
+        area = area.union(w::meter(ui, "ctx", ctx));
+        let busy = s.status == "busy";
+        let (r, _) = ui.allocate_exact_size(vec2(22.0, theme::STATUS_H), Sense::hover());
+        ui.painter().text(
+            r.center(),
+            Align2::CENTER_CENTER,
+            ph::SPARKLE,
+            theme::prop(12.0),
+            if busy { WARN } else { ACC },
+        );
+        area = area.union(r);
+        ui.add_space(8.0);
+        let now = crate::claude::unix_now();
+        ui.interact(area, Id::new(("claude-usage", wi)), Sense::hover())
+            .on_hover_ui(|ui| {
+                ui.set_min_width(250.0);
+                let row = |ui: &mut Ui, k: &str, v: String| {
+                    ui.horizontal(|ui| {
+                        ui.label(w::dim(k));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(w::strong(v));
+                        });
+                    });
+                };
+                let title = if s.name.is_empty() {
+                    "Claude Code"
+                } else {
+                    &s.name
+                };
+                ui.label(RichText::new(title).color(TX0).strong());
+                ui.label(w::faint(format!(
+                    "{} · {}",
+                    if busy { "working" } else { "idle" },
+                    compact_path(&s.cwd, 40)
+                )));
+                ui.add_space(6.0);
+                match s.context {
+                    Some((n, wnd)) => row(
+                        ui,
+                        "Context",
+                        format!(
+                            "{}k / {}k · {:.0}%",
+                            n / 1000,
+                            wnd / 1000,
+                            n as f32 * 100.0 / wnd as f32
+                        ),
+                    ),
+                    None => row(ui, "Context", "no reply yet".into()),
+                }
+                let limit = |ui: &mut Ui, k: &str, l: Option<crate::claude::Limit>| {
+                    let v = match l {
+                        Some(crate::claude::Limit {
+                            percent,
+                            resets_at: Some(t),
+                        }) => format!(
+                            "{percent:.0}% · resets in {}",
+                            crate::claude::until(t - now)
+                        ),
+                        Some(l) => format!("{:.0}%", l.percent),
+                        None => "–".into(),
+                    };
+                    row(ui, k, v);
+                };
+                limit(ui, "5-hour limit", u.five_hour);
+                limit(ui, "Weekly limit", u.seven_day);
+                if !s.model.is_empty() {
+                    row(ui, "Model", s.model.clone());
+                }
+                if u.sessions.len() > 1 {
+                    ui.label(w::faint(format!(
+                        "{} Claude sessions running",
+                        u.sessions.len()
+                    )));
+                }
+                if let Some(e) = &u.limits_error {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(format!("Limits: {e}")).color(WARN).size(11.0));
+                }
+            });
     }
 
     pub fn editor_actions(&mut self, wi: usize, actions: Vec<crate::editor::Action>) {

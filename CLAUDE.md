@@ -67,7 +67,7 @@ The visual language follows SecureWire (`../SecureWire`): IDE-style frame with a
 | File dialog | **rfd 0.16** | `Ctrl+Shift+O`, on a worker thread. |
 | Config | **toml 1** + **serde_json** | `config.toml` (hand-edited), `settings.json` (Settings window). |
 | Remote control | **tokio + tokio-tungstenite + tokio-rustls/rustls (ring) + rcgen + mdns-sd + qrcode** | Opt-in, §21. `ring` is pinned: `aws-lc-rs` needs cmake + nasm. |
-| Update check | **ureq 3** (rustls/ring, Windows only) | `update.rs`: once per launch, reads `site/releases/latest.json`; installer comes from the GitHub release, verified by size + SHA-256. |
+| HTTP | **ureq 3** (rustls/ring) | `update.rs` (Windows): once per launch, reads `site/releases/latest.json`; installer comes from the GitHub release, verified by size + SHA-256. `claude.rs`: the usage limits. |
 | Font | **JetBrains Mono NL** (bundled, OFL) | `fontFile` in config.toml overrides it for the terminal. |
 
 **Platforms:** Windows, Linux, macOS. A POSIX shell is the default everywhere it
@@ -143,6 +143,7 @@ splitview/
 │   │   ├── highlight.rs       ← one-pass syntax highlighter (per-language table)
 │   │   ├── git.rs             ← `git status --porcelain=v2` parser, row lookup
 │   │   ├── update.rs          ← update manifest, version order, URL/size/hash checks
+│   │   ├── scratch.rs         ← scratchpad document, hit tests, per-project file name
 │   │   └── fuzzy.rs           ← command-palette matching
 │   ├── term/  splitview-term (lib sv_term)
 │   │   ├── lib.rs             ← Terminal, preview_line, url_at
@@ -158,6 +159,8 @@ splitview/
 │       ├── chrome.rs          ← top bar, status bar, side-panel hosting, edge drag
 │       ├── sidebar.rs         ← Explorer (reads off-thread, watch, keys, rows)
 │       ├── editor.rs          ← Editor panel (tabs, TextEdit + highlighter, find)
+│       ├── scratchpad.rs      ← Scratchpad panel (notes, ink, shapes; autosave)
+│       ├── claude.rs          ← Claude Code sessions + usage limits (status bar)
 │       ├── dialogs.rs         ← modals: shell picker, background, confirms,
 │       │                        palette, pairing approval, toast
 │       ├── settings.rs        ← Settings model + JSON persistence
@@ -303,7 +306,7 @@ when there is a selection, else sends `^C`.
 | Close (confirms) | `x` | `close_pane` |
 | Detach / new window | `d` / `n` | `detach_pane` / `new_window` |
 | Background / list | `b` / `Shift+b` | `background_pane` / `show_background` |
-| Explorer / Editor | `e` / `Shift+e` | `toggle_sidebar` / `toggle_editor` |
+| Explorer / Editor / Scratchpad | `e` / `Shift+e` / `w` | `toggle_sidebar` / `toggle_editor` / `toggle_scratchpad` |
 | Settings / shell picker | `,` / `p` | `open_settings` / `pick_shell` |
 | Palette / reload config | `Shift+p` / `r` | `command_palette` / `reload_config` |
 
@@ -336,12 +339,36 @@ prompt of the focused pane (OSC 7), which is how commits/checkouts show up.
 
 Right of the panes. egui `TextEdit` with a cached, highlighted `LayoutJob`
 (re-laid out only when the text hash or font changes), a line-number gutter,
-find/replace (`Ctrl+F`), `Ctrl+S` save, `Ctrl+W` close tab,
+find/replace (`Ctrl+F`), `Ctrl+S` save, `Ctrl+W` close tab, `Alt+Z` wrap lines,
 `Ctrl+PageUp/PageDown` tabs, `Ctrl+Alt+←/→` width, `Esc` back. Tab inserts the
 file's detected indent; Enter keeps the line's indent. Only UTF-8 text under
 4 MB opens. A watcher thread stats the visible file every 2 s and wakes the UI
 **only if it changed**: a clean buffer follows the disk (minimal change), a dirty
 one shows a warning; saving is conditional on the stamp it was read at.
+
+### The Scratchpad
+
+Right of the panes (outermost when the editor is open too), toggled with
+`<prefix> w` or the top bar. Notes, pen strokes and shapes on a pannable
+canvas; one document per project — the focused pane's git work tree, else its
+cwd (`sv_core::scratch::project_root`) — stored as
+`<config dir>/scratchpads/<fnv-1a of the path>.json` (`file_name`; never change
+the hash, it would orphan every pad). Autosaved ~0.8 s after the last change and
+on exit; a file that doesn't parse is copied to `.bak`, never overwritten. Keys
+on the pad: `Enter` new note, `v t p l a r o x` tools, `Ctrl+Z` undo (memory only),
+select tool: drag moves (grab a shape anywhere in its box), arrows nudge, `Delete` removes,
+`Esc` leaves a note, then the pad. Settings → Panes sets which of Explorer /
+Editor / Scratchpad a new window opens with.
+
+### Claude usage (status bar)
+
+`claude.rs`: a `sv-claude` thread reads `~/.claude/sessions/<pid>.json` every
+5 s (live pids only), the context from the tail of each session's transcript,
+and — while a session runs — the 5-hour/weekly limits from
+`api.anthropic.com/api/oauth/usage` every 2 min with the token in
+`~/.claude/.credentials.json` (undocumented endpoint: expect it to change). It
+emits `UiEvent::Claude` only on change; the meters are hidden when no session
+runs.
 
 ---
 
@@ -352,7 +379,7 @@ one shows a warning; saving is conditional on the stamp it was read at.
 `close_all`, `subscribe` (remote output), `subscribe_exits`, `terminal`, `seqs`,
 `emit(UiEvent)` (send + repaint), `repaint`, `runtime()` (lazy tokio).
 
-`UiEvent`: `Exit`, `Cwd`, `AppCommand`, `FsChanged`, `Listing`, `FilePicked`,
+`UiEvent`: `Exit`, `Cwd`, `AppCommand`, `FsChanged`, `Listing`, `FilePicked`, `Claude`,
 `Remote(RemoteUi::{Status, Pairing, Action})`.
 
 Terminal bytes are **bytes** end to end (`&[u8]`), never round-tripped through
@@ -381,8 +408,8 @@ Terminal bytes are **bytes** end to end (`&[u8]`), never round-tripped through
 
 ## 12. UI conventions
 
-- Region order per window: top bar → status bar → Explorer (left) → Editor
-  (right) → central split area → overlays (modals, toast).
+- Region order per window: top bar → status bar → Explorer (left) → Scratchpad
+  (right) → Editor (right) → central split area → overlays (modals, toast).
 - One `TerminalView` per pane, kept for the pane's lifetime (no recreation on
   layout change — the widget state is just ids and caches).
 - Long lists use `ScrollArea::show_rows` (Explorer).

@@ -7,6 +7,7 @@
 //! * [`osc`] — picks OSC 7 / OSC 5170 out of the PTY stream
 //! * [`tree`] — the file sidebar's rows
 //! * [`editor`], [`highlight`] — the editor panel's model and syntax colouring
+//! * [`scratch`] — the scratchpad document (notes, ink, shapes)
 //! * [`fuzzy`] — command palette matching
 //! * [`git`] — `git status` parsing for the sidebar
 //! * [`update`] — the update manifest (`releases/latest.json`) and version order
@@ -21,5 +22,6 @@ pub mod layout;
 pub mod osc;
 pub mod paths;
 pub mod quote;
+pub mod scratch;
 pub mod tree;
 pub mod update;

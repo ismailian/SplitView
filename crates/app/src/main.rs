@@ -6,6 +6,7 @@
 
 mod app;
 mod chrome;
+mod claude;
 mod dialogs;
 mod editor;
 mod error;
@@ -16,6 +17,7 @@ mod keys;
 mod panes;
 mod profiles;
 mod remote;
+mod scratchpad;
 mod settings;
 mod settings_ui;
 mod shell;

@@ -9,6 +9,8 @@ use sv_core::config::{self, Config};
 pub struct Paths {
     pub config: PathBuf,
     pub settings: PathBuf,
+    /// One JSON file per project's scratchpad.
+    pub scratch: PathBuf,
 }
 
 impl Paths {
@@ -20,6 +22,7 @@ impl Paths {
         Self {
             config: dir.join("config.toml"),
             settings: dir.join("settings.json"),
+            scratch: dir.join("scratchpads"),
         }
     }
 }

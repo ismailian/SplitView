@@ -209,7 +209,10 @@ pub struct ShellSettings {
 pub struct UiState {
     pub sidebar_width: f32,
     pub editor_width: f32,
+    pub scratch_width: f32,
     pub show_hidden: bool,
+    /// Wrap long lines in the editor.
+    pub editor_wrap: bool,
 }
 
 impl Default for UiState {
@@ -217,9 +220,20 @@ impl Default for UiState {
         Self {
             sidebar_width: 260.0,
             editor_width: 560.0,
+            scratch_width: 420.0,
             show_hidden: false,
+            editor_wrap: false,
         }
     }
+}
+
+/// Which side panels a new window opens with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PaneDefaults {
+    pub explorer: bool,
+    pub editor: bool,
+    pub scratchpad: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -232,6 +246,7 @@ pub struct Settings {
     pub remote: RemoteSettings,
     pub shell: ShellSettings,
     pub ui: UiState,
+    pub panes: PaneDefaults,
 }
 
 impl Settings {
@@ -265,6 +280,7 @@ impl Settings {
         self.remote.port = clamp_port(self.remote.port);
         self.ui.sidebar_width = self.ui.sidebar_width.clamp(140.0, 900.0);
         self.ui.editor_width = self.ui.editor_width.clamp(260.0, 1600.0);
+        self.ui.scratch_width = self.ui.scratch_width.clamp(260.0, 1600.0);
         self
     }
 

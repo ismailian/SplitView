@@ -20,8 +20,13 @@ vocabulary. This README is the quick start.
 - **Explorer** sidebar (`<prefix> e`) that follows the focused shell's
   directory, live-updates, and is fully keyboard-driven
 - **Editor** panel (`<prefix> E`): tabs, syntax colouring, line numbers, find and
-  replace, CRLF/BOM-preserving saves that won't overwrite a change made from the
+  replace, line wrap (`Alt+Z`), CRLF/BOM-preserving saves that won't overwrite a change made from the
   terminal. `e` on a file in the sidebar, or `splitview edit <file>`
+- **Scratchpad** (`<prefix> w`): notes, pen, lines, arrows, rectangles and
+  ellipses on a canvas, one pad per project (git root, else folder), autosaved.
+  Settings → Panes picks which side panels a new window opens with
+- **Claude Code usage** in the status bar while Claude Code runs: context, 5-hour
+  and weekly limits (hover for reset times)
 - Background panes (`<prefix> b`), new windows (`<prefix> n`), detached panes
   (`<prefix> d`), shell profiles (Git Bash, PowerShell, cmd, zsh… `<prefix> p`)
 - **Remote control** (opt-in, off by default): pair a phone over an encrypted,
