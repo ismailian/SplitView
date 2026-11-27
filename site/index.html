@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SplitView: a keyboard-driven terminal with split panes</title>
-  <meta name="description" content="SplitView is a native, keyboard-driven terminal for Windows with tmux-style split panes, a file explorer that follows your shell, a built-in editor and a command palette. Free, 6.0 MB, version 0.5.0.">
+  <meta name="description" content="SplitView is a native, keyboard-driven terminal for Windows with tmux-style split panes, a file explorer that follows your shell, a built-in editor and a command palette. Free, 6.0 MB, version 0.6.0.">
   <meta property="og:title" content="SplitView: split, focus, zoom. Never reach for the mouse.">
   <meta property="og:description" content="A native terminal with tmux-style panes, a file explorer and an editor beside them.">
   <meta property="og:type" content="website">
@@ -38,7 +38,7 @@
   <div class="hero">
     <div class="wrap">
       <div class="hero-copy">
-        <span class="eyebrow"><span class="dot" aria-hidden="true"></span>v0.5.0 · scratchpad &amp; Claude Code usage · Windows</span>
+        <span class="eyebrow"><span class="dot" aria-hidden="true"></span>v0.6.0 · MCP server for AI agents · Windows</span>
         <h1>Split, focus, zoom.<br><span class="accent">Never reach for the mouse.</span></h1>
         <p class="lede">SplitView is a terminal with tmux-style panes in a native window, with a file explorer that follows your shell and an editor beside it. Everything is one keystroke away.</p>
         <div class="cta">
@@ -87,7 +87,7 @@
           <div class="app-status">
             <span class="shell">Git Bash</span>
             <span class="hide-sm">~/project</span>
-            <span class="right"><span id="prefix-badge" class="prefix-badge">Ctrl A prefix</span><span class="hide-sm">v0.5.0</span></span>
+            <span class="right"><span id="prefix-badge" class="prefix-badge">Ctrl A prefix</span><span class="hide-sm">v0.6.0</span></span>
           </div>
         </div>
         <div class="demo-side">
@@ -185,14 +185,9 @@
 
       <div class="feature flip reveal">
         <div class="feature-copy">
-          <h3>Remote control, off until you say so</h3>
-          <p>SplitView includes an encrypted server that lets a paired phone watch and type into your panes. Pairing takes a one-time code and your approval on the desktop, and the certificate is pinned.</p>
-          <div class="note">
-            <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-            <span><strong>The phone app isn't available yet.</strong> Until it is, leave this switch off and nothing listens on your network.</span>
-          </div>
+          <h3>Let an AI agent drive it, off until you say so</h3>
+          <p>Turn on the MCP server and Claude Code, or any MCP client, can open, read and close panes, run commands and wait for them to finish, and sketch a plan on the scratchpad with you. It listens on this computer only, behind a token, and Settings gives you the one line to add it to Claude Code.</p>
         </div>
-        <figure class="shot flat"><img src="/assets/img/remote.webp" loading="lazy" width="1040" height="720" alt="The Remote settings with remote control switched off, the listen address and port options, and resize and startup switches."></figure>
       </div>
     </div>
   </section>
@@ -315,15 +310,15 @@
       <div class="get reveal">
         <div class="get-main">
           <span class="kicker">Download</span>
-          <h2>SplitView 0.5.0 for Windows</h2>
+          <h2>SplitView 0.6.0 for Windows</h2>
           <p>A per-user install: no admin rights, and it replaces a 0.2.x install in place.</p>
-          <a class="btn btn-primary" href="https://github.com/ismailian/SplitView/releases/download/v0.5.0/SplitView_0.5.0_x64-setup.exe">
+          <a class="btn btn-primary" href="https://github.com/ismailian/SplitView/releases/download/v0.6.0/SplitView_0.6.0_x64-setup.exe">
             <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
             Download the installer
           </a>
           <div class="file">
-            <span>SplitView_0.5.0_x64-setup.exe · 6.0 MB · Windows 10 and 11, x64</span>
-            <span class="hash">SHA-256 <code id="hash">7f3eca01e1c96f7c133b38ceb06f7fe0aa91dd046f7b007c685970002b086706</code> <button type="button" class="copy" id="copy-hash">Copy</button></span>
+            <span>SplitView_0.6.0_x64-setup.exe · 5.6 MB · Windows 10 and 11, x64</span>
+            <span class="hash">SHA-256 <code id="hash">d4f9c229034c7e487870c1b14102b9dba981eaf3f112ac3f4b23ff601bdcda18</code> <button type="button" class="copy" id="copy-hash">Copy</button></span>
           </div>
         </div>
         <div class="get-side">
@@ -343,7 +338,7 @@
 <footer class="foot">
   <div class="wrap">
     <a class="brand" href="/"><img src="/assets/img/icon.png" alt="" width="22" height="22">SplitView</a>
-    <span>0.5.0 · made for the keyboard</span>
+    <span>0.6.0 · made for the keyboard</span>
     <nav aria-label="Legal"><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></nav>
   </div>
 </footer>

@@ -23,9 +23,6 @@ pub enum Error {
     #[error("watch error: {0}")]
     Watch(String),
 
-    #[error("remote control: {0}")]
-    Remote(String),
-
     #[error("state lock poisoned")]
     Poisoned,
 }

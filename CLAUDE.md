@@ -44,7 +44,7 @@ The visual language follows SecureWire (`../SecureWire`): IDE-style frame with a
 3. **Native feel beats fancy.** Latency and correctness of the terminal come first.
 4. **The shell is the shell.** We spawn a real shell in a real PTY. We never parse
    the user's commands and never intercept keystrokes outside prefix mode (§9).
-5. **Processes vs layout.** `hub.rs` owns PTYs and the remote server and knows
+5. **Processes vs layout.** `hub.rs` owns PTYs (the MCP server uses it) and knows
    nothing about splits; the layout lives in `sv_core::layout` and the app. Keep
    that boundary clean.
 6. **Pay only for what is visible.** eframe runs **reactive**: frames come from
@@ -66,8 +66,8 @@ The visual language follows SecureWire (`../SecureWire`): IDE-style frame with a
 | FS watch | **notify 8** | Sidebar only (`watch.rs`). |
 | File dialog | **rfd 0.16** | `Ctrl+Shift+O`, on a worker thread. |
 | Config | **toml 1** + **serde_json** | `config.toml` (hand-edited), `settings.json` (Settings window). |
-| Remote control | **tokio + tokio-tungstenite + tokio-rustls/rustls (ring) + rcgen + mdns-sd + qrcode** | Opt-in, §21. `ring` is pinned: `aws-lc-rs` needs cmake + nasm. |
-| HTTP | **ureq 3** (rustls/ring) | `update.rs` (Windows): once per launch, reads `site/releases/latest.json`; installer comes from the GitHub release, verified by size + SHA-256. `claude.rs`: the usage limits. |
+| MCP server | **std::net + serde_json** (no async runtime) | Opt-in, §21. Hand-rolled HTTP/1.1, one thread per request. |
+| HTTP client | **ureq 3** (rustls/ring; `aws-lc-rs` would need cmake + nasm) | `update.rs` (Windows): once per launch, reads `site/releases/latest.json`; installer comes from the GitHub release, verified by size + SHA-256. `claude.rs`: the usage limits. |
 | Font | **JetBrains Mono NL** (bundled, OFL) | `fontFile` in config.toml overrides it for the terminal. |
 
 **Platforms:** Windows, Linux, macOS. A POSIX shell is the default everywhere it
@@ -86,15 +86,14 @@ Rust edition 2024 (let-chains are used). Workspace: `crates/{core,term,app}`.
 │   │── keys::route ── Keymap (prefix engine) ── run_action             │
 │   │── panes.rs: layout → rects → 1px dividers, title strips,          │
 │   │             TerminalView per pane (sv_term)                       │
-│   │── drain UiEvent channel each frame                                │
+│   │── drain UiEvent channel in App::logic (runs while minimized too)  │
 │   ▼                                                                   │
 │ Arc<Hub> ─ ptys: { id → PtyHandle{writer, master, killer, term,…} }   │
-│          ─ remote: RemoteState (server, roster, devices, pairing)     │
 └────────────────────────────────────┬──────────────────────────────────┘
    per PTY: reader thread  ──────────┤ read → OscScanner → Term::advance
-            (sv-pty-N)               │ → remote broadcast → ctx.repaint
+            (sv-pty-N)               │ → count prompts → ctx.repaint
             waiter thread (sv-wait-N)│ child.wait() → UiEvent::Exit
-   remote: tokio runtime (2 workers, created on first enable)
+   mcp: listener thread (sv-mcp) + one thread per request (opt-in)
 ```
 
 ### PTY lifecycle / data flow
@@ -104,9 +103,9 @@ Rust edition 2024 (let-chains are used). Workspace: `crates/{core,term,app}`.
    `sv_term::Terminal`, starts the **reader** and **waiter** threads, stores a
    `PtyHandle`. The layout gets a new leaf.
 2. The **reader thread** blocks on the PTY, and for each chunk (≤ 64 KB):
-   scans it for OSC 7 / OSC 5170 (`sv_core::osc`), feeds it to the emulator
-   (`Terminal::advance`), fans it out to remote subscribers, and calls
-   `ctx.request_repaint()`. egui coalesces repaints to one per frame.
+   scans it for OSC 7 / OSC 5170 (`sv_core::osc`; every OSC 7 is a prompt and
+   bumps the pane's prompt counter), feeds it to the emulator
+   (`Terminal::advance`), and calls `ctx.request_repaint()`. egui coalesces repaints to one per frame.
 3. The emulator answers terminal queries (DA, cursor position) through its event
    sink, which writes straight back to the PTY writer — from the reader thread.
 4. Each frame, `TerminalView::show` draws the grid and turns keys/mouse/paste
@@ -148,12 +147,12 @@ splitview/
 │   ├── term/  splitview-term (lib sv_term)
 │   │   ├── lib.rs             ← Terminal, preview_line, url_at
 │   │   ├── view.rs            ← TerminalView egui widget (paint, keys, mouse, selection)
-│   │   ├── input.rs           ← xterm key/mouse/paste encoding
-│   │   └── snapshot.rs        ← ANSI dump of scrollback+screen (remote attach)
+│   │   └── input.rs           ← xterm key/mouse/paste encoding
 │   └── app/   splitview (bin)
 │       ├── main.rs            ← args (--version, --shot), NativeOptions
 │       ├── app.rs             ← App, Workspace, Pane; events; run_action; windows
-│       ├── hub.rs             ← PTY registry + threads, UiEvent, remote runtime
+│       ├── hub.rs             ← PTY registry + threads, UiEvent
+│       ├── mcp.rs             ← MCP server (HTTP, JSON-RPC, tools) (§21)
 │       ├── keys.rs            ← egui key → chord, input routing (keymap first)
 │       ├── panes.rs           ← split area: rects, dividers, title strips, views
 │       ├── chrome.rs          ← top bar, status bar, side-panel hosting, edge drag
@@ -162,9 +161,9 @@ splitview/
 │       ├── scratchpad.rs      ← Scratchpad panel (notes, ink, shapes; autosave)
 │       ├── claude.rs          ← Claude Code sessions + usage limits (status bar)
 │       ├── dialogs.rs         ← modals: shell picker, background, confirms,
-│       │                        palette, pairing approval, toast
+│       │                        palette, toast
 │       ├── settings.rs        ← Settings model + JSON persistence
-│       ├── settings_ui.rs     ← Settings window (Display, Keys, Aliases, …, Remote)
+│       ├── settings_ui.rs     ← Settings window (Display, Keys, Aliases, …, MCP)
 │       ├── theme.rs           ← tokens, visuals, fonts, Skin (only place colors live)
 │       ├── widgets.rs         ← small painter widgets (badge, switch, kbd, …)
 │       ├── shell.rs           ← shell detection + prompt injection (§8)
@@ -174,14 +173,11 @@ splitview/
 │       ├── git.rs             ← runs `git status` for the sidebar (TESTED)
 │       ├── store.rs           ← config dir paths, config.toml loading
 │       ├── shot.rs            ← --shot scenes + PNG writer
-│       ├── update.rs          ← launch-time update check, installer download/run (Windows)
-│       └── remote/            ← remote control (§21)
+│       └── update.rs          ← launch-time update check, installer download/run (Windows)
 ├── packaging/
 │   ├── icons/                 ← splitview.ico/.png
 │   └── windows/               ← splitview.iss, build-installer.ps1, sign-windows.ps1
 └── docs/
-    ├── remote-control-desktop.md, remote-control-mobile.md
-    ├── remote/fixtures/*.json ← golden protocol vectors (asserted by protocol.rs)
     └── design/                ← reference screenshots
 ```
 
@@ -194,8 +190,8 @@ and `toml`. Never name a package `core`.
 
 - **PTY:** the master/slave pair that lets us talk to a shell as a terminal.
 - **Pane:** one terminal: one PTY + one `sv_term::Terminal` + one `TerminalView`.
-  Always a leaf in the layout tree. `PaneId` is a `u64`; remote clients see
-  `pane-<n>`.
+  Always a leaf in the layout tree. `PaneId` is a `u64`; agents use it as is,
+  and the pane's shell gets it as `$SPLITVIEW_PANE`.
 - **Workspace / window:** one OS window with its own layout, background list,
   sidebar and editor. The first is the root viewport; others (`<prefix> n`, and
   detached panes `<prefix> d`) are egui immediate viewports in the same process,
@@ -267,6 +263,11 @@ spawning anything; a failed spawn brings the picker back with the reason, never
 an empty window. A `shell` in config.toml outranks the saved choice. Each pane
 remembers its `ShellFamily` for quoting typed paths (`sv_core::quote`).
 
+A new pane's directory: the one asked for, else the split pane's, else
+Settings → Shell → Start in (`settings.shell.startDir`, typed or picked with
+Browse… on a worker thread → `UiEvent::StartDirPicked`; ignored if missing),
+else the shell's default (home). That last step is how the app opens there.
+
 ### Gotchas
 
 - Setting `PS1` in the environment does not work — the rc file overwrites it.
@@ -287,7 +288,7 @@ Prefix model like tmux. Default prefix **`Ctrl+A`** (configurable). Prefix twice
 sends a literal prefix to the focused terminal (in the editor it selects all).
 
 Input routing (`keys::route`, at the start of each window's frame, before any
-widget reads input): pairing prompt > modal > keymap (+ the sidebar's own keys
+widget reads input): modal > keymap (+ the sidebar's own keys
 when it has focus and no prefix is pending) > widgets. Whatever the keymap
 consumes is **removed** from the frame's events, together with the `Text` event
 the same keystroke produced. Outside prefix mode, keys flow to the focused widget
@@ -374,13 +375,14 @@ runs.
 
 ## 10. Hub API (process side)
 
-`Hub` (in `Arc`) is shared by the UI, reader/waiter threads and remote sessions:
-`spawn`, `write`, `resize` (PTY), `resize_both` (grid + PTY, remote), `close`,
-`close_all`, `subscribe` (remote output), `subscribe_exits`, `terminal`, `seqs`,
-`emit(UiEvent)` (send + repaint), `repaint`, `runtime()` (lazy tokio).
+`Hub` (in `Arc`) is shared by the UI, reader/waiter threads and the MCP server:
+`spawn`, `write`, `type_line` (an agent's command; returns the prompt count that
+means it finished), `prompts`, `resize` (PTY), `close`, `close_all`, `terminal`,
+`emit(UiEvent)` (send + repaint), `repaint`.
 
-`UiEvent`: `Exit`, `Cwd`, `AppCommand`, `FsChanged`, `Listing`, `FilePicked`, `Claude`,
-`Remote(RemoteUi::{Status, Pairing, Action})`.
+`UiEvent`: `Exit`, `Cwd`, `AppCommand`, `FsChanged`, `Listing`, `Git`, `FilePicked`,
+`Claude`, `Mcp(Call)` (a tool call the UI answers on its reply channel),
+`UpdateAvailable`, `UpdateFailed`.
 
 Terminal bytes are **bytes** end to end (`&[u8]`), never round-tripped through
 `String`.
@@ -392,12 +394,12 @@ Terminal bytes are **bytes** end to end (`&[u8]`), never round-tripped through
 - `cargo fmt --all` and `cargo clippy --release --workspace --all-targets -- -D
   warnings` must be clean.
 - **No `unwrap`/`expect`/`panic!` outside tests** in anything that runs per frame
-  or on a PTY/remote thread. Return typed errors (`error.rs`, `thiserror`).
+  or on a PTY/MCP thread. Return typed errors (`error.rs`, `thiserror`).
 - **Locking discipline:** never hold the PTY registry lock across a blocking
   read or a send. The writer has its own lock and is never held while taking the
   terminal lock (the emulator writes replies from inside `advance`).
 - **The UI thread never blocks:** directory reads, file dialogs, disk polling
-  and remote work run elsewhere. (Opening/saving a file in the editor is a
+  and MCP requests run elsewhere. (Opening/saving a file in the editor is a
   synchronous read/write of a small file — acceptable.)
 - **Drop order on close:** kill the child, then drop the master, then forget it.
 - Colors only from `theme.rs` (`tok::*` for chrome, `Skin` for the terminal).
@@ -451,13 +453,15 @@ Terminal bytes are **bytes** end to end (`&[u8]`), never round-tripped through
 
 ## 15. Security
 
-- Remote control is the only network surface and is off by default (§21).
+- The MCP server is the only listening socket: off by default, `127.0.0.1`
+  only, bearer token (§21).
 - Program-supplied text (titles) is sanitized before it is drawn outside the
   terminal (`hub::sanitize`). OSC 52 (clipboard) and color queries are not
   honoured. Pasted text has ESC stripped and is bracketed when the app asked.
 - URLs opened by `Ctrl+click` must be `http(s)://` and are passed as a single
   argument (never through a shell).
-- The filesystem (sidebar/editor) is never exposed to remote clients.
+- The MCP tools reach panes and scratchpads only; the editor and the
+  filesystem browser are not exposed.
 
 ---
 
@@ -473,8 +477,8 @@ splitview --shot out.png --scene main                    # screenshots (see READ
 ```
 
 Tests and screenshot runs should set `SPLITVIEW_CONFIG_DIR` to a scratch
-directory: config.toml, settings.json **and** the remote identity/audit log all
-follow it.
+directory: config.toml, settings.json (MCP token included) and the scratchpads
+all follow it.
 
 ---
 
@@ -483,11 +487,12 @@ follow it.
 - `sv_core`: layout invariants, keymap state machine, config validation, path
   and quoting rules, OSC scanner (split chunks, bounds), tree rows, editor model,
   highlighter (spans contiguous, no panics on unterminated input).
-- `sv_term`: emulation basics, DA replies, preview line, URL detection, ANSI
-  snapshot round trip.
+- `sv_term`: emulation basics, DA replies, preview line, tail text, URL
+  detection.
 - App: settings persistence, key→chord mapping, a **real PTY round trip**
-  (`hub::tests`), shell injection, profiles, files, watch, remote protocol
-  (golden fixtures), auth, pairing, TLS pinning over loopback.
+  (`hub::tests`, incl. an agent line finishing at its prompt), shell injection,
+  profiles, files, watch, scratchpad persistence and agent edits, the MCP
+  server over loopback HTTP (auth, handshake, tools, a UI-answered call).
 - UI changes: verify with `--shot` scenes (and, for input paths, by driving a
   test window — only ever by PID, never "all processes named splitview").
 
@@ -535,54 +540,59 @@ follow it.
 - **Watching a directory on Windows locks its ancestors** — `watch.rs` watches only
   the outermost directory recursively on Windows; don't "simplify" it.
 - **The editor buffer only holds `\n`** — always go through `decode_text`/`encode_text`.
-- **Remote input bypasses the UI.** It goes straight to the PTY; the echo comes
-  back through the reader. Never add local echo.
-- **The roster must never be published while remote control is off.**
-- **A pane's `seq` counts chunks**, not bytes.
-- **`Notify::notify_waiters()` only wakes a waiter that already polled** —
-  revocation uses `notify_one()`.
-- **Enabling remote control binds a LAN port** and on Windows triggers a firewall
-  prompt the first time — tests should prefer loopback.
+- **Agent input bypasses the UI.** `run_command`/`send_text` go straight to the
+  PTY; the echo comes back through the reader. Never add local echo.
+- **A minimized window runs no `ui` pass.** Anything an agent waits on must be
+  handled from `App::logic` (events are drained there), or MCP calls time out
+  while SplitView is minimized.
+- **"Command finished" = the prompt came back** (OSC 7 count reaches the
+  `type_line` target). A fresh shell hasn't drawn its first prompt yet; the
+  target accounts for it. Shells without the injected hook never report one, so
+  `run_command` waits out `wait_ms` there.
+- **One pad per directory, whatever the spelling.** `D:/x` and `d:\x\` hash to
+  the same file; `Scratchpad::project` maps them to one loaded pad, or two
+  copies would overwrite each other.
 
 ---
 
-## 21. Remote control
+## 21. MCP server
 
-An **opt-in** encrypted WebSocket server: a paired phone sees the live panes,
-attaches to one, types into it, creates or closes panes. Normative design and
-wire protocol: [`docs/remote-control-desktop.md`](docs/remote-control-desktop.md)
-(the Flutter client's view: `docs/remote-control-mobile.md`; golden vectors in
-`docs/remote/fixtures/`, asserted by `remote/protocol.rs`). The desktop document
-wins if they disagree. Its file paths predate 0.3; see the mapping at its top.
+An **opt-in** [MCP](https://modelcontextprotocol.io) server (`mcp.rs`) so an AI
+agent (Claude Code or any MCP client) can drive SplitView. Settings → MCP turns
+it on, picks the port (default 7690) and shows the `claude mcp add --scope user --transport
+http splitview http://127.0.0.1:<port>/mcp --header "Authorization: Bearer …"`
+line to copy. A status-bar item shows while it runs.
+
+Transport: Streamable HTTP, JSON responses only (no SSE stream: GET/DELETE are
+405), one JSON-RPC message per POST, `Connection: close`. Plain std threads.
+
+Tools — panes: `list_panes`, `open_pane` (cwd, command, beside, direction,
+focus), `close_pane` (refuses the main window's last pane: that would quit),
+`focus_pane`, `run_command` (types + Enter, waits for the prompt, returns the
+tail), `send_text` (raw keys), `read_pane`. Scratchpad: `scratchpad_read`,
+`scratchpad_add_note`, `scratchpad_add_shape`, `scratchpad_update_note`,
+`scratchpad_delete`, `scratchpad_open`; `dir` picks the project (default: the
+focused pane's), item ids are list positions.
 
 Rules:
 
-1. **Input goes straight to the PTY** (`Hub::write`).
-2. **Output fans out in the reader thread**: the emulator, plus a
-   `tokio::sync::broadcast` for subscribers. A slow receiver is lagged and
-   resynced, never waited on. With nothing subscribed it costs one atomic load.
-3. **Layout changes go through the UI**: `create_pane`/`close_pane` arrive as
-   `UiEvent::Remote(RemoteUi::Action)` addressed to a window label (`main`,
-   `sv-win-N`, `detached-N`) and use the normal layout operations.
-4. **Snapshots** (a client attaching) are read directly from the emulator
-   (`Terminal::snapshot_ansi`) on a blocking task.
-5. **The roster** (titles, cwd, size, preview line, background flag per window)
-   is published by the app — debounced ~150 ms, plus every 2 s while a session
-   is live — and **only while the server is on**.
-
-Security posture (unchanged): off by default and not restored at launch unless
-asked; TLS with a pinned self-signed certificate (fingerprint via the pairing
-QR); pairing = single-use 8-char code (120 s, 5 attempts) **and** a desktop
-approval prompt that needs a click (Esc rejects); 256-bit tokens stored as
-SHA-256, constant-time compare, revocable (cuts live sessions); 4 sessions,
-30-min idle timeout, 10 attempts/IP/min, one path (`/remote`); remote resize is
-a setting; every pair/approve/reject/connect/disconnect/revoke goes to
-`remote/audit.log`; the top bar shows an indicator while the server is on, with a
-dot while a session is live.
-
-Reachability: LAN + mDNS (`_splitview._tcp`); Tailscale or another overlay for
-anything further. A sleeping laptop is a dead server.
-
----
+1. **Terminal tools run on the request thread** against the hub; layout and
+   scratchpad tools go to the UI thread as `UiEvent::Mcp` and are answered by
+   `App::mcp_call` (10 s timeout) — the layout still only changes on the UI.
+2. **Agent edits on the pad are ordinary edits**: one undo step each, autosaved.
+3. Security: bound to `127.0.0.1` only; 256-bit token, compared in constant
+   time; a request with a non-local `Origin` is refused (DNS rebinding); bodies
+   capped at 1 MB, headers at 32 KB. Anything with the token can type into the
+   user's shells — say so wherever the token is shown.
 
 _When in doubt: keyboard-first, thin lines, real PTYs, no idle frames._
+
+## Rust standards
+Cached from the `rust-project-standards` skill. Follow these; don't reload the skill except where marked (full skill).
+- Builds: dev `debug = "line-tables-only"`, `[profile.dev.package."*"]` and `build-override` `debug = false`, `[lib] doctest = false` without doc tests, `rust-lld` on Windows MSVC. Never keep both profiles: `cargo clean --profile dev` before release, `cargo clean --release` before debug/test.
+- Version: single source `[workspace.package] version`; bump before every release build (patch default; minor = features; major = breaking); installer reads it from Cargo.
+- Layout: workspace with `crates/<app>-core` (no UI deps, testable alone) + `crates/<app>-gui`/`-cli`; split big or unrelated parts into their own crate.
+- egui window: starts normal (not min/max/fullscreen), first launch centered at 70% width × 80% height; later launches restore last size and position if still on a connected monitor (else centered default); only record while normal; `persist_window: false`; Plus Jakarta Sans for all text; release GUI uses `windows_subsystem = "windows"`. (code: full skill §4)
+- Installer for GUI apps / multi-feature CLIs: `cargo-packager` NSIS in `[package.metadata.packager]`; flow bump → clean dev → release build → package → report path + version. (setup: full skill §5)
+- Icon: `assets/icons/icon.svg` + PNGs 16–512 + `icon.ico`; used for window, exe (`winresource`), installer. (full skill §6)
+- UI design: don't load `ui-ux-pro-max`; it's only for the first UI draft of an empty/new project.

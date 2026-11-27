@@ -10,7 +10,6 @@
 //! Scrollback lives here, in the emulator; the PTY side is a dumb pipe.
 
 pub mod input;
-pub mod snapshot;
 pub mod view;
 
 use std::sync::Arc;
@@ -19,6 +18,7 @@ use alacritty_terminal::event::{Event as AtEvent, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
@@ -189,6 +189,31 @@ impl Terminal {
         String::new()
     }
 
+    /// The last `n` lines of scrollback + screen as plain text, ending at the
+    /// last non-blank line (what an agent reads after running a command).
+    pub fn tail_text(&self, n: usize) -> String {
+        let g = self.inner.lock();
+        let grid = g.term.grid();
+        let cols = grid.columns();
+        let row = |y: i32| -> String {
+            let r = &grid[Line(y)];
+            // A wide char's second cell is a spacer, not text.
+            let s: String = (0..cols)
+                .map(|x| &r[Column(x)])
+                .filter(|c| !c.flags.contains(Flags::WIDE_CHAR_SPACER))
+                .map(|c| c.c)
+                .collect();
+            s.trim_end().to_owned()
+        };
+        let (top, mut end) = (grid.topmost_line().0, grid.bottommost_line().0);
+        while end > top && row(end).is_empty() {
+            end -= 1;
+        }
+        let n = i32::try_from(n.max(1)).unwrap_or(i32::MAX);
+        let start = end.saturating_sub(n - 1).max(top);
+        (start..=end).map(row).collect::<Vec<_>>().join("\n")
+    }
+
     /// The text of the line under a visible row/column, and the column — for
     /// finding a URL under the mouse.
     pub fn line_at(&self, row: usize) -> String {
@@ -257,6 +282,18 @@ mod tests {
             t.screen_text().lines().take(2).collect::<Vec<_>>(),
             ["hello", "world red"]
         );
+    }
+
+    #[test]
+    fn tail_reaches_into_scrollback_and_skips_blank_bottom() {
+        let (t, _) = term();
+        t.advance(b"a\r\nb\r\nc\r\nd\r\ne\r\nf");
+        assert_eq!(t.tail_text(3), "d\ne\nf");
+        assert_eq!(t.tail_text(100), "a\nb\nc\nd\ne\nf");
+        t.advance(b"\r\n");
+        assert_eq!(t.tail_text(1), "f");
+        t.advance("日本 ✓".as_bytes());
+        assert_eq!(t.tail_text(1), "日本 ✓");
     }
 
     #[test]

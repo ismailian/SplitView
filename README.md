@@ -29,10 +29,11 @@ vocabulary. This README is the quick start.
   and weekly limits (hover for reset times)
 - Background panes (`<prefix> b`), new windows (`<prefix> n`), detached panes
   (`<prefix> d`), shell profiles (Git Bash, PowerShell, cmd, zsh… `<prefix> p`)
-- **Remote control** (opt-in, off by default): pair a phone over an encrypted,
-  certificate-pinned connection. Settings → Remote. See
-  [`docs/remote-control-desktop.md`](./docs/remote-control-desktop.md)
-- Small and quiet: one ~11 MB executable, no webview, ~40 MB of memory, and no
+- **MCP server** (opt-in, off by default): lets an AI agent such as Claude Code
+  list, open, close and read panes, run commands in them, and brainstorm on the
+  scratchpad. Local only (`127.0.0.1`), behind a token. Settings → MCP shows the
+  `claude mcp add …` line to copy
+- Small and quiet: one ~10 MB executable, no webview, ~40 MB of memory, and no
   frames drawn while nothing changes
 
 ## Layout
@@ -42,11 +43,10 @@ crates/core/   splitview-core — pure, tested logic: layout tree, keymap/prefix
                engine, config, paths & quoting, OSC scanner, sidebar tree,
                editor model, syntax highlighter, fuzzy matcher
 crates/term/   splitview-term — Terminal (alacritty_terminal behind a mutex) and
-               its egui widget: renderer, keys, mouse, selection, ANSI snapshots
-crates/app/    splitview — the eframe app: hub (PTYs + remote server), panes,
-               chrome, sidebar, editor, dialogs, settings, remote/
+               its egui widget: renderer, keys, mouse, selection
+crates/app/    splitview — the eframe app: hub (PTYs), MCP server, panes,
+               chrome, sidebar, editor, scratchpad, dialogs, settings
 packaging/     icons, Windows installer (Inno Setup) and signing script
-docs/          remote-control design + wire spec, golden protocol fixtures
 ```
 
 ## Build and test
@@ -86,7 +86,7 @@ With neither set the build warns and stays unsigned; set
 
 ### Screenshots
 
-`splitview --shot out.png --scene main|settings|palette|remote|background|zoom`
+`splitview --shot out.png --scene main|settings|palette|shell|mcp|background|zoom`
 builds a scene, captures the window and exits. Set `SPLITVIEW_CONFIG_DIR` to a
 scratch directory so it doesn't touch your settings.
 

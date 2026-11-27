@@ -1,29 +1,25 @@
-//! The process side of SplitView: live PTYs, their reader/waiter threads, and the
-//! remote-control server. The UI holds an `Arc<Hub>`; so do the reader threads
-//! and remote sessions.
+//! The process side of SplitView: live PTYs and their reader/waiter threads.
+//! The UI holds an `Arc<Hub>`; so do the reader threads and the MCP server.
 //!
 //! Rust owns processes, the UI owns layout (CLAUDE.md §2.5): nothing here knows
-//! what a split is. Anything that changes the layout — a shell exiting, a remote
-//! client asking for a pane — is sent to the UI thread as a [`UiEvent`].
+//! what a split is. Anything that changes the layout — a shell exiting, an
+//! agent asking for a pane — is sent to the UI thread as a [`UiEvent`].
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, OnceLock};
 use std::thread;
 
-use bytes::Bytes;
 use parking_lot::Mutex;
 use portable_pty::{ChildKiller, MasterPty, PtySize, native_pty_system};
 use sv_core::layout::PaneId;
 use sv_core::osc::{Osc, OscScanner};
 use sv_core::quote::ShellFamily;
 use sv_term::{Size, TermEvent, Terminal};
-use tokio::sync::broadcast;
 
 use crate::error::{Error, Result};
-use crate::remote::{RemoteState, RemoteUi};
 use crate::shell::{ShellConfig, build_command, detect_program};
 
 /// Read buffer for the reader thread: big enough to drain bursts (`cat` of a
@@ -32,11 +28,6 @@ const READ_BUF: usize = 64 * 1024;
 
 /// Scrollback lines kept per pane.
 pub const SCROLLBACK: usize = 10_000;
-
-/// How many chunks a remote subscriber may fall behind before it is lagged out.
-/// A lagged receiver loses history and resyncs; it never applies backpressure to
-/// the reader thread.
-const REMOTE_BACKLOG: usize = 128;
 
 /// Things the UI thread must act on.
 #[derive(Debug)]
@@ -55,8 +46,10 @@ pub enum UiEvent {
     Git(u64, Option<Box<sv_core::git::GitStatus>>),
     /// The native file picker returned.
     FilePicked(Option<String>),
-    /// Remote control wants something from the UI.
-    Remote(RemoteUi),
+    /// Settings → Shell → Start in: the folder picker returned one.
+    StartDirPicked(String),
+    /// An MCP tool call that needs the UI thread (layout, scratchpad).
+    Mcp(crate::mcp::Call),
     /// Claude Code sessions or limits changed (`claude.rs`).
     Claude(Box<crate::claude::Usage>),
     /// A newer release is out (`update.rs`).
@@ -67,40 +60,6 @@ pub enum UiEvent {
     UpdateFailed(String),
 }
 
-/// A PTY's output fan-out to remote subscribers (the local terminal is fed
-/// directly by the reader thread).
-pub struct OutputSink {
-    remote: broadcast::Sender<Bytes>,
-    seq: AtomicU64,
-}
-
-impl OutputSink {
-    fn new() -> Self {
-        let (remote, _) = broadcast::channel(REMOTE_BACKLOG);
-        Self {
-            remote,
-            seq: AtomicU64::new(0),
-        }
-    }
-
-    fn send(&self, chunk: &[u8]) {
-        self.seq.fetch_add(1, Ordering::Relaxed);
-        // One atomic load is the entire cost while nothing is subscribed.
-        if self.remote.receiver_count() > 0 {
-            let _ = self.remote.send(Bytes::copy_from_slice(chunk));
-        }
-    }
-
-    pub fn subscribe(&self) -> broadcast::Receiver<Bytes> {
-        self.remote.subscribe()
-    }
-
-    /// Chunks written so far. Only ever compared against itself.
-    pub fn seq(&self) -> u64 {
-        self.seq.load(Ordering::Relaxed)
-    }
-}
-
 type Writer = Arc<Mutex<Box<dyn Write + Send>>>;
 
 /// Everything needed to keep one PTY alive and talk to it.
@@ -108,7 +67,11 @@ pub struct PtyHandle {
     writer: Writer,
     master: Box<dyn MasterPty + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
-    pub output: Arc<OutputSink>,
+    /// Prompts shown so far (each one reports the cwd, OSC 7): a command an
+    /// agent typed has finished when this moves.
+    prompts: Arc<AtomicU64>,
+    /// Lines an agent typed ([`Hub::type_line`]).
+    typed: AtomicU64,
     pub term: Terminal,
 }
 
@@ -124,24 +87,17 @@ pub struct Spawned {
 
 pub struct Hub {
     ptys: Mutex<HashMap<PaneId, PtyHandle>>,
-    pub remote: RemoteState,
     ui: Mutex<Sender<UiEvent>>,
     ctx: egui::Context,
-    exits: broadcast::Sender<PaneId>,
-    runtime: OnceLock<tokio::runtime::Runtime>,
     next_id: AtomicU64,
 }
 
 impl Hub {
     pub fn new(ctx: egui::Context, ui: Sender<UiEvent>) -> Arc<Self> {
-        let (exits, _) = broadcast::channel(64);
         Arc::new(Self {
             ptys: Mutex::new(HashMap::new()),
-            remote: RemoteState::new(),
             ui: Mutex::new(ui),
             ctx,
-            exits,
-            runtime: OnceLock::new(),
             next_id: AtomicU64::new(1),
         })
     }
@@ -161,29 +117,6 @@ impl Hub {
         self.ctx.request_repaint();
     }
 
-    /// The tokio runtime the remote server runs on, created on first use so a
-    /// user who never enables remote control never pays for its threads.
-    pub fn runtime(&self) -> &tokio::runtime::Runtime {
-        self.runtime.get_or_init(|| {
-            tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .thread_name("sv-remote")
-                .enable_all()
-                .build()
-                .unwrap_or_else(|_| {
-                    // Two worker threads could not be started; one will do.
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .unwrap_or_else(|e| panic!("no tokio runtime: {e}"))
-                })
-        })
-    }
-
-    pub fn subscribe_exits(&self) -> broadcast::Receiver<PaneId> {
-        self.exits.subscribe()
-    }
-
     /// Open a PTY, spawn the shell, and start its reader and waiter threads.
     pub fn spawn(self: &Arc<Self>, id: PaneId, size: Size, cfg: &ShellConfig) -> Result<Spawned> {
         let pair = native_pty_system()
@@ -196,7 +129,9 @@ impl Hub {
             .map_err(|e| Error::Pty(e.to_string()))?;
         let program = detect_program(cfg);
         let family = ShellFamily::of(&program);
-        let cmd = build_command(cfg)?;
+        let mut cmd = build_command(cfg)?;
+        // An agent running in this pane can tell which pane it is (MCP).
+        cmd.env("SPLITVIEW_PANE", id.to_string());
         let mut child = pair
             .slave
             .spawn_command(cmd)
@@ -232,13 +167,13 @@ impl Hub {
             })
         };
         let term = Terminal::new(size, SCROLLBACK, sink);
-        let output = Arc::new(OutputSink::new());
+        let prompts = Arc::new(AtomicU64::new(0));
 
-        // Reader: PTY bytes → OSC scan → emulator → remote fan-out → repaint.
+        // Reader: PTY bytes → OSC scan → emulator → repaint.
         // Blocks on the read (never under the registry lock) and exits on EOF,
         // which dropping the master in `close` causes.
         {
-            let (term, output, hub) = (term.clone(), output.clone(), Arc::downgrade(self));
+            let (term, prompts, hub) = (term.clone(), prompts.clone(), Arc::downgrade(self));
             thread::Builder::new()
                 .name(format!("sv-pty-{id}"))
                 .spawn(move || {
@@ -253,9 +188,11 @@ impl Hub {
                         let chunk = &buf[..n];
                         scanner.scan(chunk, &mut found);
                         term.advance(chunk);
-                        output.send(chunk);
                         let Some(hub) = hub.upgrade() else { break };
                         for osc in found.drain(..) {
+                            if matches!(osc, Osc::Cwd(_)) {
+                                prompts.fetch_add(1, Ordering::Relaxed);
+                            }
                             hub.emit(match osc {
                                 Osc::Cwd(p) => match sv_core::paths::parse_osc7(&p) {
                                     Some(p) => UiEvent::Cwd(id, p),
@@ -279,7 +216,6 @@ impl Hub {
                 .spawn(move || {
                     let _ = child.wait();
                     if let Some(hub) = hub.upgrade() {
-                        let _ = hub.exits.send(id);
                         hub.emit(UiEvent::Exit(id));
                     }
                 })?;
@@ -291,7 +227,8 @@ impl Hub {
                 writer,
                 master: pair.master,
                 killer,
-                output,
+                prompts,
+                typed: AtomicU64::new(0),
                 term: term.clone(),
             },
         );
@@ -304,7 +241,7 @@ impl Hub {
         })
     }
 
-    /// Write bytes to a pane's PTY (keystrokes, local or remote).
+    /// Write bytes to a pane's PTY (keystrokes, or an agent over MCP).
     pub fn write(&self, id: PaneId, bytes: &[u8]) -> Result<()> {
         let w = self
             .ptys
@@ -332,20 +269,6 @@ impl Hub {
             .map_err(|e| Error::Pty(e.to_string()))
     }
 
-    /// Resize both the emulator grid and the PTY (a remote client resizing).
-    pub fn resize_both(&self, id: PaneId, size: Size) -> Result<()> {
-        let term = self
-            .ptys
-            .lock()
-            .get(&id)
-            .map(|h| h.term.clone())
-            .ok_or(Error::PaneNotFound(id))?;
-        term.resize(size);
-        self.resize(id, size)?;
-        self.repaint();
-        Ok(())
-    }
-
     /// Kill the shell, drop the master (EOF ends the reader), forget the pane.
     pub fn close(&self, id: PaneId) {
         let handle = self.ptys.lock().remove(&id);
@@ -362,23 +285,31 @@ impl Hub {
         }
     }
 
-    pub fn subscribe(&self, id: PaneId) -> Option<(broadcast::Receiver<Bytes>, u64)> {
-        self.ptys
-            .lock()
-            .get(&id)
-            .map(|h| (h.output.subscribe(), h.output.seq()))
-    }
-
     pub fn terminal(&self, id: PaneId) -> Option<Terminal> {
         self.ptys.lock().get(&id).map(|h| h.term.clone())
     }
 
-    pub fn seqs(&self) -> HashMap<PaneId, u64> {
+    /// Type a line into a pane's shell for an agent. Returns the prompt count
+    /// that means it finished: one more than now, and never before the startup
+    /// prompt and every earlier agent line have shown theirs (a fresh shell may
+    /// not have drawn its first prompt yet).
+    pub fn type_line(&self, id: PaneId, line: &str) -> Result<u64> {
+        let (now, n) = {
+            let ptys = self.ptys.lock();
+            let h = ptys.get(&id).ok_or(Error::PaneNotFound(id))?;
+            let n = h.typed.fetch_add(1, Ordering::Relaxed) + 1;
+            (h.prompts.load(Ordering::Relaxed), n)
+        };
+        self.write(id, format!("{line}\r").as_bytes())?;
+        Ok((now + 1).max(1 + n))
+    }
+
+    /// Prompts a pane has shown so far; only compared with itself.
+    pub fn prompts(&self, id: PaneId) -> Option<u64> {
         self.ptys
             .lock()
-            .iter()
-            .map(|(id, h)| (*id, h.output.seq()))
-            .collect()
+            .get(&id)
+            .map(|h| h.prompts.load(Ordering::Relaxed))
     }
 
     pub fn pane_count(&self) -> usize {
@@ -450,6 +381,10 @@ mod tests {
         assert!(wait_for(|| rx
             .try_iter()
             .any(|e| matches!(e, UiEvent::Cwd(p, _) if p == id))));
+        // An agent's line is done once the prompt after it shows.
+        let target = hub.type_line(id, "echo agent-$((1+1))").expect("type");
+        assert!(wait_for(|| hub.prompts(id) >= Some(target)));
+        assert!(s.term.tail_text(50).contains("agent-2"));
         hub.resize(
             id,
             Size {
@@ -466,19 +401,5 @@ mod tests {
     #[test]
     fn sanitizes_titles() {
         assert_eq!(sanitize(" vim\x1b[31m x\u{7} "), "vim[31m x");
-    }
-
-    #[test]
-    fn lagging_subscriber_never_blocks() {
-        let sink = OutputSink::new();
-        let mut slow = sink.subscribe();
-        for i in 0..(REMOTE_BACKLOG * 2) {
-            sink.send(&[i as u8]);
-        }
-        assert_eq!(sink.seq(), (REMOTE_BACKLOG * 2) as u64);
-        assert!(matches!(
-            slow.try_recv(),
-            Err(broadcast::error::TryRecvError::Lagged(_))
-        ));
     }
 }

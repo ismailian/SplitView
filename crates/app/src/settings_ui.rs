@@ -1,15 +1,13 @@
 //! The Settings window: a modal with a section list on the left. Changes apply
 //! live and are saved as they are made (prompt-related ones reach new panes).
 
-use std::time::Instant;
-
 use egui::{Align, Color32, Frame, Key, Layout, Margin, RichText, Sense, Ui, vec2};
 use egui_phosphor::regular as ph;
 use sv_core::keymap::{ACTIONS, chords_for, pretty};
 use sv_core::paths::prompt_dir;
 
 use crate::app::App;
-use crate::remote::{BindMode, RemoteStatus};
+use crate::hub::UiEvent;
 use crate::settings::{AliasS, MAX_DIR_SEGMENTS, PRESETS, parse_hex, to_hex};
 use crate::theme::{self, tok::*};
 use crate::widgets as w;
@@ -24,7 +22,7 @@ pub enum Section {
     Prompt,
     Banner,
     Shell,
-    Remote,
+    Mcp,
     About,
 }
 
@@ -36,16 +34,13 @@ const SECTIONS: &[(Section, &str, &str)] = &[
     (Section::Prompt, ph::INFO, "Terminal info"),
     (Section::Banner, ph::ROWS, "Banner"),
     (Section::Shell, ph::TERMINAL_WINDOW, "Shell"),
-    (Section::Remote, ph::BROADCAST, "Remote"),
+    (Section::Mcp, ph::ROBOT, "MCP"),
     (Section::About, ph::QUESTION, "About"),
 ];
 
 #[derive(Default)]
 pub struct SettingsState {
     pub section: Section,
-    /// Remote status polled while the Remote section is open (countdown).
-    pub(crate) status: Option<(RemoteStatus, Option<Instant>)>,
-    pub(crate) error: Option<String>,
 }
 
 fn heading(ui: &mut Ui, text: &str, sub: &str) {
@@ -196,7 +191,7 @@ impl App {
                                         Section::Prompt => self.section_prompt(ui),
                                         Section::Banner => self.section_banner(ui),
                                         Section::Shell => self.section_shell(ui),
-                                        Section::Remote => self.section_remote(ui, st),
+                                        Section::Mcp => self.section_mcp(ui),
                                         Section::About => self.section_about(ui),
                                     }
                                 });
@@ -448,7 +443,7 @@ impl App {
         let user = std::env::var("USERNAME")
             .or_else(|_| std::env::var("USER"))
             .unwrap_or_else(|_| "you".into());
-        let host = crate::remote::identity::host_name();
+        let host = host_name();
         let mut line = String::from("┌─");
         if p.user || p.host {
             let who = match (p.user, p.host) {
@@ -541,176 +536,116 @@ impl App {
         {
             self.profiles = crate::profiles::detect();
         }
+        ui.add_space(14.0);
+        let sh = &mut self.settings.shell;
+        let hub = self.hub.clone();
+        field(ui, "Start in", |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut sh.start_dir)
+                    .hint_text("your home folder")
+                    .font(theme::mono(12.0))
+                    .desired_width(300.0),
+            );
+            if ui.button(format!("{} Browse…", ph::FOLDER_OPEN)).clicked() {
+                let from = sh.start_dir();
+                // Native dialogs block: keep them off the UI thread.
+                std::thread::spawn(move || {
+                    let mut d = rfd::FileDialog::new().set_title("Start in");
+                    if let Some(f) = from {
+                        d = d.set_directory(f);
+                    }
+                    if let Some(p) = d.pick_folder() {
+                        hub.emit(UiEvent::StartDirPicked(p.to_string_lossy().into_owned()));
+                    }
+                });
+            }
+            if !sh.start_dir.is_empty() && ui.small_button("Clear").clicked() {
+                sh.start_dir.clear();
+            }
+        });
+        if !sh.start_dir.trim().is_empty() && sh.start_dir().is_none() {
+            ui.label(
+                RichText::new("Folder not found: panes start in your home folder.").color(WARN),
+            );
+        } else {
+            ui.label(w::faint(
+                "Where the first pane opens when SplitView starts. Splits keep the folder of the pane they split.",
+            ));
+        }
     }
 
-    fn section_remote(&mut self, ui: &mut Ui, st: &mut SettingsState) {
+    fn section_mcp(&mut self, ui: &mut Ui) {
         heading(
             ui,
-            "Remote control",
-            "Let a paired phone watch your panes, type into them, and open or close them. Off unless you turn it on.",
+            "MCP server",
+            "Let an AI agent on this computer (Claude Code, or any MCP client) list, open, close and read panes, run commands in them, and write on the scratchpad.",
         );
-        // Keep the status fresh (countdown, sessions) while this is on screen.
-        let fresh = st
-            .status
-            .as_ref()
-            .is_none_or(|(_, t)| t.is_none_or(|t| t.elapsed().as_millis() > 900));
-        if fresh {
-            st.status = Some((self.hub.remote.status(), Some(Instant::now())));
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_secs(1));
-        }
-        let status = st
-            .status
-            .as_ref()
-            .map(|s| s.0.clone())
-            .unwrap_or_else(|| self.remote_status.clone());
-        let mut enabled = status.enabled;
-        let hub = self.hub.clone();
-        let label = if enabled {
-            "Remote control is on"
-        } else {
-            "Remote control is off"
+        let on = self.mcp.as_ref().map(|m| m.url());
+        let label = match &on {
+            Some(url) => format!("On at {url}"),
+            None => "Off".into(),
         };
-        if w::switch(ui, &mut enabled, label).changed() {
-            let r = if enabled {
-                hub.remote.enable(&hub, self.settings.remote.config())
-            } else {
-                hub.remote.disable(&hub)
-            };
-            match r {
-                Ok(s) => {
-                    self.remote_status = s.clone();
-                    st.status = Some((s, Some(Instant::now())));
-                    st.error = None;
-                }
-                Err(e) => st.error = Some(e.to_string()),
-            }
-        }
-        if let Some(e) = &st.error {
+        w::switch(ui, &mut self.settings.mcp.enabled, &label);
+        if let Some(e) = &self.mcp_error {
             ui.label(RichText::new(e).color(ERR));
         }
         ui.add_space(8.0);
-        let rs = &mut self.settings.remote;
-        field(ui, "Listen on", |ui| {
-            ui.add_enabled_ui(!status.enabled, |ui| {
-                ui.radio_value(&mut rs.bind, BindMode::Lan, "Local network");
-                ui.radio_value(
-                    &mut rs.bind,
-                    BindMode::Loopback,
-                    "This computer only (tunnel)",
-                );
-            });
-        });
+        let m = &mut self.settings.mcp;
         field(ui, "Port", |ui| {
             ui.add_enabled(
-                !status.enabled,
-                egui::DragValue::new(&mut rs.port).range(0..=65535),
+                !m.enabled,
+                egui::DragValue::new(&mut m.port).range(1024..=65535),
             );
-            ui.label(w::faint("0 = any free port"));
+            ui.label(w::faint("127.0.0.1 only; turn off to change"));
         });
-        w::switch(ui, &mut rs.allow_resize, "Allow a phone to resize a pane");
-        ui.add_space(3.0);
-        w::switch(ui, &mut rs.enable_at_startup, "Turn on at startup");
-        ui.add_space(10.0);
-
-        if !status.enabled {
-            ui.label(w::faint(
-                "Turn it on to pair a device. Over the internet, use Tailscale or another overlay.",
-            ));
-            return;
-        }
-        w::hline(ui);
-        ui.add_space(8.0);
-        egui::Grid::new("remote-info")
-            .num_columns(2)
-            .spacing([14.0, 5.0])
-            .show(ui, |ui| {
-                ui.label(w::dim("Address"));
-                ui.label(
-                    RichText::new(format!(
-                        "{}:{}",
-                        status.host.clone().unwrap_or_default(),
-                        status.port
-                    ))
-                    .monospace()
-                    .color(TX0),
-                );
-                ui.end_row();
-                ui.label(w::dim("Name"));
-                ui.label(w::strong(&status.host_name));
-                ui.end_row();
-                if let Some(fp) = &status.fingerprint {
-                    ui.label(w::dim("Fingerprint"));
-                    ui.label(RichText::new(fp).monospace().size(10.5).color(TX2));
-                    ui.end_row();
-                }
-            });
-        ui.add_space(10.0);
-        match &status.pairing {
-            Some(p) => {
-                ui.horizontal_top(|ui| {
-                    qr(ui, &p.payload, 180.0);
-                    ui.add_space(12.0);
-                    ui.vertical(|ui| {
-                        ui.label(w::dim("Scan with the SplitView app, or type the code:"));
-                        ui.label(RichText::new(&p.code).monospace().size(24.0).color(ACC));
-                        ui.label(w::faint(format!(
-                            "expires in {} s · single use",
-                            p.seconds_left
-                        )));
-                        ui.add_space(8.0);
-                        if ui.button("Cancel pairing").clicked() {
-                            let _ = hub.remote.cancel_pairing(&hub);
-                            st.status = None;
-                        }
-                    });
-                });
+        let mut copy = None;
+        field(ui, "Token", |ui| {
+            let shown = if m.token.len() > 8 {
+                format!("{}…", m.token.chars().take(8).collect::<String>())
+            } else {
+                "made when first turned on".into()
+            };
+            ui.label(RichText::new(shown).monospace().color(TX1));
+            if !m.token.is_empty() && ui.small_button("Copy").clicked() {
+                copy = Some(m.token.clone());
             }
-            None => {
-                if w::primary(ui, &format!("{} Pair a device", ph::DEVICE_MOBILE)).clicked() {
-                    match hub.remote.start_pairing(&hub) {
-                        Ok(s) => st.status = Some((s, Some(Instant::now()))),
-                        Err(e) => st.error = Some(e.to_string()),
-                    }
-                }
+            if ui
+                .small_button("New token")
+                .on_hover_text("Clients using the old one stop working")
+                .clicked()
+            {
+                m.token = crate::mcp::new_token();
+            }
+        });
+        if let Some(url) = &on {
+            ui.add_space(10.0);
+            ui.label(w::dim("Add it to Claude Code (run once in a terminal):"));
+            let cmd = crate::mcp::claude_command(url, &m.token);
+            Frame::NONE
+                .fill(self.skin.term.bg)
+                .corner_radius(4)
+                .inner_margin(Margin::symmetric(12, 10))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&cmd).font(theme::term_font(12.0)).color(TX0),
+                        )
+                        .wrap(),
+                    );
+                });
+            ui.add_space(4.0);
+            if ui.button(format!("{} Copy command", ph::COPY)).clicked() {
+                copy = Some(cmd);
             }
         }
-        ui.add_space(12.0);
-        ui.label(RichText::new("LIVE SESSIONS").size(10.5).color(TX2));
-        if status.sessions.is_empty() {
-            ui.label(w::faint("No one is connected."));
-        }
-        for s in &status.sessions {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(ph::CIRCLE).color(WARN).size(9.0));
-                ui.label(w::strong(&s.device_name));
-                ui.label(RichText::new(&s.address).monospace().size(11.0).color(TX3));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.small_button("Disconnect").clicked() {
-                        let _ = hub.remote.disconnect_session(&hub, s.id);
-                        st.status = None;
-                    }
-                });
-            });
+        if let Some(t) = copy {
+            ui.ctx().copy_text(t);
         }
         ui.add_space(10.0);
-        ui.label(RichText::new("PAIRED DEVICES").size(10.5).color(TX2));
-        if status.devices.is_empty() {
-            ui.label(w::faint("None yet."));
-        }
-        for d in &status.devices {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(ph::DEVICE_MOBILE).color(TX2));
-                ui.label(w::strong(&d.name));
-                ui.label(w::faint(&d.platform));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.small_button("Revoke").clicked() {
-                        let _ = hub.remote.revoke_device(&hub, &d.id);
-                        st.status = None;
-                    }
-                });
-            });
-        }
+        ui.label(w::faint(
+            "Anything holding the token can type into your shells. Agents running in a pane see their own pane id in $SPLITVIEW_PANE.",
+        ));
     }
 
     fn section_about(&mut self, ui: &mut Ui) {
@@ -756,31 +691,14 @@ impl App {
     }
 }
 
-/// Draw a QR code for `data` (the pairing payload).
-fn qr(ui: &mut Ui, data: &str, size: f32) {
-    let Ok(code) = qrcode::QrCode::new(data.as_bytes()) else {
-        ui.label(w::faint("(QR unavailable)"));
-        return;
-    };
-    let n = code.width();
-    let quiet = 2;
-    let cells = n + 2 * quiet;
-    let cell = (size / cells as f32).floor().max(1.0);
-    let side = cell * cells as f32;
-    let (r, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(r, 4, Color32::WHITE);
-    let colors = code.to_colors();
-    for y in 0..n {
-        for x in 0..n {
-            if colors[y * n + x] == qrcode::Color::Dark {
-                let min = r.min + vec2((x + quiet) as f32 * cell, (y + quiet) as f32 * cell);
-                p.rect_filled(
-                    egui::Rect::from_min_size(min, vec2(cell, cell)),
-                    0,
-                    Color32::BLACK,
-                );
-            }
-        }
-    }
+/// This machine's name for the prompt preview: env first, then
+/// `/etc/hostname`, then a constant.
+fn host_name() -> String {
+    ["COMPUTERNAME", "HOSTNAME"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .chain(std::fs::read_to_string("/etc/hostname").ok())
+        .map(|n| n.trim().to_owned())
+        .find(|n| !n.is_empty())
+        .unwrap_or_else(|| "splitview".into())
 }

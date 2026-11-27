@@ -10,7 +10,7 @@
 //! and a save must not silently undo it.
 //!
 //! These are for the local editor only. Like `read_dir`, they are never
-//! exposed to a remote client (CLAUDE.md §21).
+//! exposed to an agent over MCP (CLAUDE.md §21).
 
 use std::fs::{self, File, Metadata};
 use std::io::{self, Write};

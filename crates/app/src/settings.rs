@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::remote::{BindMode, DEFAULT_PORT, RemoteConfig};
+use crate::mcp::DEFAULT_PORT;
 use crate::shell::{Alias, PromptInfo};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -161,38 +161,27 @@ pub struct AliasS {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct RemoteSettings {
-    /// Re-enable the server at launch. Off by default and deliberately opt-in.
-    pub enable_at_startup: bool,
-    pub bind: BindMode,
+pub struct McpSettings {
+    /// Run the MCP server (127.0.0.1 only). Off by default.
+    pub enabled: bool,
     pub port: u16,
-    pub allow_resize: bool,
+    /// Bearer token clients must send; made on first enable.
+    pub token: String,
 }
 
-impl Default for RemoteSettings {
+impl Default for McpSettings {
     fn default() -> Self {
         Self {
-            enable_at_startup: false,
-            bind: BindMode::Lan,
+            enabled: false,
             port: DEFAULT_PORT,
-            allow_resize: true,
+            token: String::new(),
         }
     }
 }
 
-impl RemoteSettings {
-    pub fn config(&self) -> RemoteConfig {
-        RemoteConfig {
-            bind: self.bind,
-            port: clamp_port(self.port),
-            allow_resize: self.allow_resize,
-        }
-    }
-}
-
-/// Ports below 1024 need privileges we neither have nor want; 0 = any free port.
-pub fn clamp_port(p: u16) -> u16 {
-    if p != 0 && p < 1024 { DEFAULT_PORT } else { p }
+/// Ports below 1024 need privileges we neither have nor want.
+fn clamp_port(p: u16) -> u16 {
+    if p < 1024 { DEFAULT_PORT } else { p }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -201,6 +190,17 @@ pub struct ShellSettings {
     /// A `ShellProfile.id`; `None` until chosen, which is what makes the first
     /// launch ask.
     pub default_profile: Option<String>,
+    /// Where a pane starts when it has no pane to take a directory from (the
+    /// first pane at launch). Empty: the shell's own default (home).
+    pub start_dir: String,
+}
+
+impl ShellSettings {
+    /// The start directory, if one is set and still exists.
+    pub fn start_dir(&self) -> Option<String> {
+        let d = self.start_dir.trim();
+        (!d.is_empty() && std::path::Path::new(d).is_dir()).then(|| d.to_owned())
+    }
 }
 
 /// Bits of UI state that persist (widths, toggles).
@@ -243,7 +243,7 @@ pub struct Settings {
     pub prompt_info: PromptInfoS,
     pub aliases: Vec<AliasS>,
     pub banner: String,
-    pub remote: RemoteSettings,
+    pub mcp: McpSettings,
     pub shell: ShellSettings,
     pub ui: UiState,
     pub panes: PaneDefaults,
@@ -277,7 +277,7 @@ impl Settings {
             .clamp(sv_core::config::FONT_MIN, sv_core::config::FONT_MAX);
         d.divider_size = d.divider_size.clamp(1.0, 4.0);
         self.prompt_info.dir_segments = self.prompt_info.dir_segments.min(MAX_DIR_SEGMENTS);
-        self.remote.port = clamp_port(self.remote.port);
+        self.mcp.port = clamp_port(self.mcp.port);
         self.ui.sidebar_width = self.ui.sidebar_width.clamp(140.0, 900.0);
         self.ui.editor_width = self.ui.editor_width.clamp(260.0, 1600.0);
         self.ui.scratch_width = self.ui.scratch_width.clamp(260.0, 1600.0);
@@ -326,7 +326,7 @@ mod tests {
         assert_eq!(s.display.bg, "#000000");
         assert_eq!(s.display.fg, Display::default().fg);
         assert_eq!(s.banner, "hi");
-        assert!(!s.remote.enable_at_startup);
+        assert!(!s.mcp.enabled);
         let dir = std::env::temp_dir().join(format!("sv-settings-{}", std::process::id()));
         let path = dir.join("settings.json");
         std::fs::create_dir_all(&dir).unwrap();
@@ -345,14 +345,25 @@ mod tests {
     #[test]
     fn clamps_on_load() {
         let s: Settings = serde_json::from_str(
-            r#"{"display":{"fontSize":500,"dividerSize":0},"remote":{"port":80},"promptInfo":{"dirSegments":50}}"#,
+            r#"{"display":{"fontSize":500,"dividerSize":0},"mcp":{"port":80},"promptInfo":{"dirSegments":50}}"#,
         )
         .unwrap();
         let s = s.sanitized();
         assert_eq!(s.display.font_size, sv_core::config::FONT_MAX);
         assert_eq!(s.display.divider_size, 1.0);
-        assert_eq!(s.remote.port, DEFAULT_PORT);
+        assert_eq!(s.mcp.port, DEFAULT_PORT);
         assert_eq!(s.prompt_info.dir_segments, MAX_DIR_SEGMENTS);
+    }
+
+    #[test]
+    fn start_dir_only_when_it_exists() {
+        let mut s = ShellSettings::default();
+        assert_eq!(s.start_dir(), None);
+        let here = std::env::temp_dir().to_string_lossy().into_owned();
+        s.start_dir = format!("  {here} ");
+        assert_eq!(s.start_dir(), Some(here.clone()));
+        s.start_dir = format!("{here}/sv-no-such-dir-{}", std::process::id());
+        assert_eq!(s.start_dir(), None);
     }
 
     #[test]

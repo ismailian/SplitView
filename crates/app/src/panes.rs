@@ -40,8 +40,7 @@ impl App {
     fn show_panes(&mut self, ui: &mut Ui, wi: usize, area: Rect) {
         let d = self.skin.divider_size;
         let key = self.windows[wi].key;
-        let modal_here =
-            self.modal.as_ref().is_some_and(|(k, _)| *k == key) || !self.pairing.is_empty();
+        let modal_here = self.modal.as_ref().is_some_and(|(k, _)| *k == key);
         let layout = self.windows[wi].layout.clone();
         let focused = layout.focused;
         let w_focus = self.windows[wi].focus;

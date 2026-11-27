@@ -1,5 +1,5 @@
 //! Modals and overlays: the shell picker, the backgrounded-panes picker,
-//! confirmations, the command palette, the remote pairing prompt, toasts.
+//! confirmations, the command palette, toasts.
 //! A modal owns the keyboard of its window while open; none of its keys leak
 //! into the terminal underneath.
 
@@ -69,10 +69,7 @@ impl Modal {
         Modal::Settings(Box::default())
     }
     pub fn settings_at(s: Section) -> Self {
-        Modal::Settings(Box::new(SettingsState {
-            section: s,
-            ..Default::default()
-        }))
+        Modal::Settings(Box::new(SettingsState { section: s }))
     }
 }
 
@@ -282,9 +279,7 @@ fn update_prompt(ctx: &egui::Context, rel: &sv_core::update::Release) -> Option<
 
 impl App {
     pub fn show_overlays(&mut self, ctx: &egui::Context, wi: usize) {
-        if !self.pairing.is_empty() && wi == self.active_window() {
-            self.pairing_prompt(ctx);
-        } else if self
+        if self
             .modal
             .as_ref()
             .is_some_and(|(k, _)| *k == self.windows[wi].key)
@@ -786,60 +781,6 @@ impl App {
             return false;
         }
         true
-    }
-
-    /// A device asks to pair. Not skippable; Esc rejects; approving takes a click.
-    fn pairing_prompt(&mut self, ctx: &egui::Context) {
-        let Some(req) = self.pairing.first().cloned() else {
-            return;
-        };
-        let (keys, _) = crate::keys::take_all(ctx);
-        let mut answer = None;
-        if keys.iter().any(|(k, _)| *k == Key::Escape) {
-            answer = Some(false);
-        }
-        dialog(ctx, "pairing", 460.0, |ui| {
-            title_row(
-                ui,
-                ph::DEVICE_MOBILE,
-                "Allow a device to control SplitView?",
-            );
-            Frame::NONE.inner_margin(Margin::symmetric(16, 12)).show(ui, |ui| {
-                egui::Grid::new("pair-grid").num_columns(2).spacing([14.0, 6.0]).show(ui, |ui| {
-                    ui.label(w::dim("Device"));
-                    ui.label(w::strong(&req.device_name));
-                    ui.end_row();
-                    ui.label(w::dim("Platform"));
-                    ui.label(w::strong(&req.platform));
-                    ui.end_row();
-                    ui.label(w::dim("Address"));
-                    ui.label(RichText::new(&req.address).monospace().color(TX0));
-                    ui.end_row();
-                });
-                ui.add_space(8.0);
-                ui.label(RichText::new("If you approve, it can see your terminals and type into them. Only approve a device you are pairing right now.").color(WARN).size(12.0));
-            });
-            w::hline(ui);
-            Frame::NONE
-                .fill(BG2)
-                .inner_margin(Margin::symmetric(14, 9))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if w::primary(ui, "Approve").clicked() {
-                            answer = Some(true);
-                        }
-                        if ui.button("Reject").clicked() {
-                            answer = Some(false);
-                        }
-                        ui.label(w::faint("Esc rejects"));
-                    });
-                });
-        });
-        if let Some(a) = answer {
-            let _ = self.hub.remote.respond_to_pairing(req.request_id, a);
-            self.pairing.remove(0);
-        }
     }
 
     fn show_toast(&mut self, ctx: &egui::Context) {

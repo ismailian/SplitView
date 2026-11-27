@@ -1,7 +1,7 @@
 {
-    "version":  "0.5.0",
-    "url":  "https://github.com/ismailian/SplitView/releases/download/v0.5.0/SplitView_0.5.0_x64-setup.exe",
-    "size":  6293621,
-    "sha256":  "7f3eca01e1c96f7c133b38ceb06f7fe0aa91dd046f7b007c685970002b086706",
-    "changelog":  "What\u0027s new\n- Scratchpad (prefix w, or the pencil in the top bar): notes, pen, lines, arrows, rectangles and ellipses on a canvas, with a select tool to move things around. One pad per project, saved automatically.\n- Claude Code usage in the status bar while Claude Code runs: context window, 5-hour and weekly limits. Hover for reset times.\n- Editor: wrap long lines (Alt+Z or the wrap button).\n- Settings \u003e Panes: choose whether the Explorer, Editor and Scratchpad are open when a window opens.\n- SplitView now checks for updates at launch and can install them in place.\n- Cleaner top bar: the command palette box sits in the centre."
+    "version":  "0.6.0",
+    "url":  "https://github.com/ismailian/SplitView/releases/download/v0.6.0/SplitView_0.6.0_x64-setup.exe",
+    "size":  5901631,
+    "sha256":  "d4f9c229034c7e487870c1b14102b9dba981eaf3f112ac3f4b23ff601bdcda18",
+    "changelog":  "- New: MCP server (Settings \u003e MCP, off by default). Lets an AI agent such as Claude Code list, open, close and read panes, run commands, and brainstorm on the scratchpad. Local only, behind a token.\n- New: Start in folder (Settings \u003e Shell): where SplitView opens its first pane. Type it or pick it with Browse.\n- Fixed: wide characters (CJK) read back with extra spaces.\n- Removed: remote control (phone pairing)."
 }

@@ -21,7 +21,6 @@ use crate::dialogs::{Modal, PickerMode};
 use crate::editor::Editor;
 use crate::hub::{Hub, UiEvent};
 use crate::profiles::{self, ShellProfile};
-use crate::remote::{PairingRequest, RemoteStatus, RemoteUi};
 use crate::settings::Settings;
 use crate::shell::{self, ShellConfig};
 use crate::sidebar::Sidebar;
@@ -68,7 +67,7 @@ pub enum Focus {
 /// One window: a layout of panes with its own sidebar and editor.
 pub struct Workspace {
     pub key: u64,
-    /// Remote roster label (`main`, `sv-win-2`, `detached-3`).
+    /// The window's name for agents (`main`, `sv-win-2`, `detached-3`).
     pub label: String,
     pub viewport: ViewportId,
     /// Set for a popped-out single pane: the window it goes back to.
@@ -80,7 +79,7 @@ pub struct Workspace {
     pub sidebar: Sidebar,
     pub editor: Editor,
     pub scratch_open: bool,
-    /// Monotonic, bumped when the window gains focus (remote target window).
+    /// Monotonic, bumped when the window gains focus (the active window).
     pub focused_at: f64,
     /// Close this (secondary) window at the end of the frame.
     pub closing: bool,
@@ -114,16 +113,14 @@ pub struct App {
     pub profiles: Vec<ShellProfile>,
     /// The open modal and the window it belongs to.
     pub modal: Option<(u64, Modal)>,
-    /// Pairing requests waiting for an answer (outrank every other modal).
-    pub pairing: Vec<PairingRequest>,
-    pub remote_status: RemoteStatus,
+    /// The MCP server while it runs, or why it could not start.
+    pub mcp: Option<crate::mcp::Server>,
+    pub mcp_error: Option<String>,
     pub toast: Option<Toast>,
     /// A release the update checker found, shown once no other modal is open.
     pending_update: Option<Box<sv_core::update::Release>>,
     /// No shell could be started at all: say so instead of an empty window.
     pub startup_error: Option<String>,
-    roster_dirty: bool,
-    last_publish: Instant,
     focus_clock: f64,
     /// `--shot`: a scripted scene, then a screenshot and exit.
     pub shot: Option<crate::shot::Shot>,
@@ -148,7 +145,6 @@ impl App {
             settings.display.font_size
         };
         let mut app = Self {
-            remote_status: hub.remote.status(),
             egui_ctx: cc.egui_ctx.clone(),
             hub,
             events,
@@ -160,12 +156,11 @@ impl App {
             font_size,
             profiles: profiles::detect(),
             modal: None,
-            pairing: Vec::new(),
+            mcp: None,
+            mcp_error: None,
             toast: None,
             pending_update: None,
             startup_error: None,
-            roster_dirty: true,
-            last_publish: Instant::now(),
             focus_clock: 1.0,
             shot,
             quit_confirmed: false,
@@ -191,11 +186,8 @@ impl App {
         if app.shot.is_none() {
             crate::claude::watch(&app.hub);
         }
-        if app.settings.remote.enable_at_startup {
-            let cfg = app.settings.remote.config();
-            if let Err(e) = app.hub.remote.enable(&app.hub, cfg) {
-                app.toast(format!("Remote control did not start: {e}"), true);
-            }
+        if app.shot.is_none() {
+            app.apply_mcp();
         }
         app
     }
@@ -364,7 +356,6 @@ impl App {
                 shell,
             },
         );
-        self.roster_dirty = true;
         Ok(id)
     }
 
@@ -380,7 +371,9 @@ impl App {
     ) -> Result<PaneId, String> {
         let w = &self.windows[wi];
         let from = w.layout.focused.and_then(|f| self.panes.get(&f));
-        let cwd = cwd.or_else(|| from.and_then(|p| p.cwd.clone()));
+        let cwd = cwd
+            .or_else(|| from.and_then(|p| p.cwd.clone()))
+            .or_else(|| self.settings.shell.start_dir());
         let size = from.map_or(
             Size {
                 cols: 100,
@@ -425,7 +418,6 @@ impl App {
     pub fn close_pane(&mut self, id: PaneId) {
         self.hub.close(id);
         self.panes.remove(&id);
-        self.roster_dirty = true;
         let Some(wi) = self.window_of(id) else {
             return;
         };
@@ -508,7 +500,38 @@ impl App {
         if (size - self.font_size).abs() > f32::EPSILON {
             self.set_font_size(size);
         }
+        self.apply_mcp();
         self.save_settings();
+    }
+
+    /// Start, restart or stop the MCP server to match the settings.
+    pub fn apply_mcp(&mut self) {
+        let m = &mut self.settings.mcp;
+        if !m.enabled {
+            self.mcp = None;
+            self.mcp_error = None;
+            return;
+        }
+        if m.token.is_empty() {
+            m.token = crate::mcp::new_token();
+        }
+        if self
+            .mcp
+            .as_ref()
+            .is_some_and(|s| s.port == m.port && s.token == m.token)
+        {
+            return;
+        }
+        self.mcp = None; // frees the port before binding it again
+        match crate::mcp::Server::start(self.hub.clone(), m.port, m.token.clone()) {
+            Ok(s) => {
+                self.mcp = Some(s);
+                self.mcp_error = None;
+            }
+            Err(e) => {
+                self.mcp_error = Some(format!("MCP server did not start on port {}: {e}", m.port))
+            }
+        }
     }
 
     pub fn set_font_size(&mut self, px: f32) {
@@ -719,7 +742,6 @@ impl App {
                 self.toast(e, true);
             }
         }
-        self.roster_dirty = true;
         let n = self.windows[wi].background.len();
         self.toast(
             format!("Pane backgrounded — {n} running. Prefix Shift+B lists them"),
@@ -733,7 +755,6 @@ impl App {
             let (id, _) = w.background.remove(i);
             w.layout = w.layout.insert_beside(id);
             w.focus = Focus::Terminal;
-            self.roster_dirty = true;
         }
     }
 
@@ -758,7 +779,6 @@ impl App {
         );
         d.layout = Layout::single(f);
         self.windows.push(d);
-        self.roster_dirty = true;
     }
 
     /// Send a detached pane back to the window it came from.
@@ -774,7 +794,6 @@ impl App {
         }
         self.windows[wi].layout = Layout::default();
         self.windows[wi].closing = true;
-        self.roster_dirty = true;
     }
 
     fn new_window(&mut self, wi: usize) {
@@ -831,7 +850,6 @@ impl App {
                         && p.cwd.as_deref() != Some(native.as_str())
                     {
                         p.cwd = Some(native);
-                        self.roster_dirty = true;
                         if let Some(wi) = self.window_of(id)
                             && self.windows[wi].layout.focused == Some(id)
                         {
@@ -860,14 +878,20 @@ impl App {
                     self.insert_path(wi, &path);
                 }
                 UiEvent::FilePicked(None) => {}
-                UiEvent::Remote(r) => self.remote_event(r),
+                UiEvent::StartDirPicked(dir) => {
+                    self.settings.shell.start_dir = dir;
+                    self.save_settings();
+                }
+                UiEvent::Mcp(c) => {
+                    let r = self.mcp_call(&c.tool, &c.args);
+                    let _ = c.reply.send(r);
+                }
                 UiEvent::Claude(u) => self.claude = *u,
                 UiEvent::UpdateAvailable(r) => self.pending_update = Some(r),
                 UiEvent::UpdateFailed(e) => self.toast(format!("Update failed: {e}"), true),
             }
         }
         if self.modal.is_none()
-            && self.pairing.is_empty()
             && let Some(r) = self.pending_update.take()
         {
             let key = self.windows[self.active_window()].key;
@@ -909,97 +933,12 @@ impl App {
         }
     }
 
-    fn remote_event(&mut self, r: RemoteUi) {
-        match r {
-            RemoteUi::Status(s) => {
-                self.remote_status = s;
-                self.roster_dirty = true;
-            }
-            RemoteUi::Pairing(p) => self.pairing.push(p),
-            RemoteUi::Action(a) => {
-                let Some(wi) = self.windows.iter().position(|w| w.label == a.window_label) else {
-                    return;
-                };
-                match a.action {
-                    "create_pane" => {
-                        let wi = if self.windows[wi].detached_from.is_some() {
-                            0
-                        } else {
-                            wi
-                        };
-                        if let Err(e) =
-                            self.split_into(wi, Direction::Right, a.cwd.clone(), None, false)
-                        {
-                            self.toast(format!("Remote: couldn't open a pane: {e}"), true);
-                        }
-                    }
-                    "close_pane" => {
-                        if let Some(id) = a.pane_id.as_deref().and_then(crate::remote::parse_pane)
-                            && self.panes.contains_key(&id)
-                        {
-                            self.close_pane(id);
-                        }
-                    }
-                    _ => {}
-                }
-                self.publish_roster(true);
-            }
-        }
-    }
-
     pub fn active_window(&self) -> usize {
         self.windows
             .iter()
             .enumerate()
             .max_by(|a, b| a.1.focused_at.total_cmp(&b.1.focused_at))
             .map_or(0, |(i, _)| i)
-    }
-
-    /// Publish every window's panes to remote clients (debounced; a no-op while
-    /// remote control is off — the roster must never exist unless asked for).
-    pub fn publish_roster(&mut self, force: bool) {
-        if !self.remote_status.enabled {
-            return;
-        }
-        let live = !self.remote_status.sessions.is_empty();
-        let due = (self.roster_dirty && self.last_publish.elapsed() > Duration::from_millis(150))
-            || (live && self.last_publish.elapsed() > Duration::from_secs(2));
-        if !force && !due {
-            return;
-        }
-        self.roster_dirty = false;
-        self.last_publish = Instant::now();
-        let seqs = crate::remote::wire_seqs(&self.hub);
-        for w in &self.windows {
-            let mut panes = Vec::new();
-            let mut push = |id: PaneId, backgrounded: bool| {
-                if let Some(p) = self.panes.get(&id) {
-                    let size = p.term.size();
-                    panes.push(crate::remote::PublishedPane {
-                        id: crate::remote::pane_key(id),
-                        title: p.title.lock().clone(),
-                        cwd: p.cwd.clone(),
-                        cols: size.cols,
-                        rows: size.rows,
-                        preview: p.term.preview_line(),
-                        backgrounded,
-                    });
-                }
-            };
-            for id in w.layout.leaves() {
-                push(id, false);
-            }
-            for (id, _) in &w.background {
-                push(*id, true);
-            }
-            let snap = crate::remote::WindowPanes {
-                window_label: w.label.clone(),
-                focused_at: w.focused_at,
-                focused_pane_id: w.layout.focused.map(crate::remote::pane_key),
-                panes,
-            };
-            let _ = self.hub.remote.publish_window(snap, &seqs);
-        }
     }
 
     // ---- frame -----------------------------------------------------------
@@ -1056,7 +995,6 @@ impl App {
         if ctx.input(|i| i.viewport().focused.unwrap_or(false)) && self.active_window() != wi {
             self.focus_clock += 1.0;
             self.windows[wi].focused_at = self.focus_clock;
-            self.roster_dirty = true;
         }
         self.handle_close_request(&ctx, wi);
         self.route_input(&ctx, wi);
@@ -1069,12 +1007,9 @@ impl App {
         self.show_overlays(&ctx, wi);
     }
 
-    /// Keys: pairing prompt > modal > keymap (+ sidebar's own keys) > widgets.
+    /// Keys: modal > keymap (+ sidebar's own keys) > widgets.
     fn route_input(&mut self, ctx: &egui::Context, wi: usize) {
         let key = self.windows[wi].key;
-        if !self.pairing.is_empty() && wi == self.active_window() {
-            return; // the prompt reads its own keys
-        }
         if self.modal.as_ref().is_some_and(|(k, _)| *k == key) {
             return; // the modal reads its own keys
         }
@@ -1171,6 +1106,16 @@ pub fn keymap_config(cfg: &Config) -> KeymapConfig {
 }
 
 impl eframe::App for App {
+    /// Runs before every frame and also while the window is minimized, so
+    /// events (an agent's MCP calls included) and saves never wait for it to
+    /// be shown again.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.drain_events();
+        if let Some(e) = self.scratch.autosave(ctx) {
+            self.toast(e, true);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if let Some((path, since, n)) = self.frame_stats.as_mut() {
@@ -1189,7 +1134,6 @@ impl eframe::App for App {
                 *since = Instant::now();
             }
         }
-        self.drain_events();
         if let Some(shot) = self.shot.as_mut() {
             shot.tick(&ctx);
         }
@@ -1221,38 +1165,11 @@ impl eframe::App for App {
             i += 1;
         }
         // Drop closed windows (never the main one).
-        let before = self.windows.len();
         let mut k = 0;
         self.windows.retain(|w| {
             k += 1;
             k == 1 || !w.closing
         });
-        if self.windows.len() != before {
-            self.roster_dirty = true;
-            let labels: Vec<String> = self.windows.iter().map(|w| w.label.clone()).collect();
-            let seqs = crate::remote::wire_seqs(&self.hub);
-            let _ = labels;
-            // Windows that are gone must not keep their panes in the roster.
-            for label in self
-                .hub
-                .remote
-                .roster()
-                .iter()
-                .map(|p| p.window.clone())
-                .collect::<std::collections::HashSet<_>>()
-            {
-                if !self.windows.iter().any(|w| w.label == label) {
-                    self.hub.remote.forget_window(&label, &seqs);
-                }
-            }
-        }
-        if let Some(e) = self.scratch.autosave(&ctx) {
-            self.toast(e, true);
-        }
-        self.publish_roster(false);
-        if self.remote_status.enabled && !self.remote_status.sessions.is_empty() {
-            ctx.request_repaint_after(Duration::from_secs(2));
-        }
         if let Some(t) = &self.toast {
             let left = Duration::from_secs(4).saturating_sub(t.at.elapsed());
             if left.is_zero() {
@@ -1270,7 +1187,7 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.persist_widths();
         let _ = self.scratch.flush();
-        let _ = self.hub.remote.disable(&self.hub);
+        self.mcp = None;
         self.hub.close_all();
     }
 }

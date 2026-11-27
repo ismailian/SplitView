@@ -21,7 +21,7 @@
 <main id="main" class="wrap">
   <article class="doc">
     <h1>Privacy</h1>
-    <p class="meta">Last updated November 25, 2026 · covers SplitView 0.5.0 and this website</p>
+    <p class="meta">Last updated November 27, 2026 · covers SplitView 0.6.0 and this website</p>
     <p>SplitView has no accounts, no analytics and no telemetry. The app doesn't send your data to us, and we don't run a server that could receive it.</p>
 
     <h2>The app</h2>
@@ -40,15 +40,8 @@
     <p>When Claude Code is running on your computer, SplitView shows its usage in the status bar. To do that it reads Claude Code's own files in <code>~\.claude</code>: the list of running sessions and the end of each session's transcript, for the context size. It doesn't copy or keep them.</p>
     <p>For the 5-hour and weekly limits it sends the access token from Claude Code's <code>.credentials.json</code> to Anthropic (<code>api.anthropic.com</code>), the company that issued it, about every two minutes while a session runs. The token goes nowhere else and isn't stored by SplitView. If Claude Code isn't running, none of this happens.</p>
 
-    <h2>Remote control</h2>
-    <p>Remote control is off by default, and nothing listens on your network unless you turn it on in Settings. The phone app isn't available yet. When you enable the feature:</p>
-    <ul>
-      <li>SplitView creates a self-signed certificate and private key.</li>
-      <li>Your computer's name and the server's port are announced on your local network over mDNS, so a phone can find it.</li>
-      <li>In <code>%APPDATA%\splitview\remote</code>, SplitView keeps the certificate and key, a list of paired devices with hashed access tokens, and an audit log. The log records events such as enabling the server, pairing attempts and connections, with details like device names, addresses and pairing codes.</li>
-      <li>A paired device can see your pane titles, working directories and terminal output, and can type into your panes. That traffic is encrypted and goes directly between the device and your computer, not through us.</li>
-    </ul>
-    <p>You can revoke a device in Settings, which also ends its live session. Delete the <code>remote</code> folder to remove the stored data.</p>
+    <h2>MCP server</h2>
+    <p>The MCP server is off by default. When you turn it on in Settings, SplitView listens on <code>127.0.0.1</code> only, so nothing on your network can reach it, and keeps a random access token in its settings file. A program on your computer that presents the token, such as an AI agent you set up, can see your pane titles, working directories and terminal output, type into your panes, and read and change your scratchpads. What the agent then does with that, including sending it to its own provider, is up to that agent and its terms. Turn the server off, or make a new token, to cut access.</p>
 
     <h2>This website</h2>
     <p>This site is hosted on Cloudflare Pages. It sets no cookies and uses no analytics, ads or trackers, and its fonts and scripts are served from this site. Cloudflare processes your request to deliver the pages, which involves technical data such as your IP address and browser details. See <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare's privacy policy</a>.</p>
@@ -60,7 +53,7 @@
 <footer class="foot">
   <div class="wrap">
     <a class="brand" href="/"><img src="/assets/img/icon.png" alt="" width="22" height="22">SplitView</a>
-    <span>0.5.0</span>
+    <span>0.6.0</span>
     <nav aria-label="Legal"><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></nav>
   </div>
 </footer>

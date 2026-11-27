@@ -125,9 +125,19 @@ impl Scratchpad {
         let Some(cwd) = cwd else {
             return String::new();
         };
+        let docs = &self.docs;
         self.roots
             .entry(cwd.to_owned())
-            .or_insert_with(|| project_root(cwd, |p| Path::new(p).join(".git").exists()))
+            .or_insert_with(|| {
+                let root = project_root(cwd, |p| Path::new(p).join(".git").exists());
+                // Spellings of one directory (`D:/x`, `d:\x\`) share a file, so
+                // they must share the loaded pad too, or saves overwrite each other.
+                let f = file_name(&root);
+                docs.keys()
+                    .find(|k| file_name(k) == f)
+                    .cloned()
+                    .unwrap_or(root)
+            })
             .clone()
     }
 
@@ -216,6 +226,44 @@ impl Scratchpad {
         } else {
             ctx.request_repaint_after(at - now);
             None
+        }
+    }
+
+    /// A project's pad, for an agent reading it (MCP).
+    pub fn items_for(&mut self, cwd: Option<&str>) -> (String, &[Item]) {
+        let key = self.project(cwd);
+        self.load(&key);
+        let items = self.docs.get(&key).map_or(&[][..], |d| &d.items[..]);
+        (key, items)
+    }
+
+    /// Change a project's pad on an agent's behalf: one undo step, autosaved
+    /// like any edit. Nothing changes if `f` fails.
+    pub fn edit<T>(
+        &mut self,
+        cwd: Option<&str>,
+        f: impl FnOnce(&mut Vec<Item>) -> Result<T, String>,
+    ) -> Result<(String, T), String> {
+        let key = self.project(cwd);
+        self.load(&key);
+        self.snapshot(&key);
+        let before = self.items(&key).len();
+        match f(self.items(&key)) {
+            Ok(v) => {
+                // Indices moved: drop the user's note/selection rather than point at another item.
+                if self.items(&key).len() < before {
+                    self.editing = None;
+                    self.selected = None;
+                }
+                self.touch(&key);
+                Ok((key, v))
+            }
+            Err(e) => {
+                if let Some(prev) = self.undo.get_mut(&key).and_then(|s| s.pop()) {
+                    *self.items(&key) = prev;
+                }
+                Err(e)
+            }
         }
     }
 
@@ -826,6 +874,34 @@ fn save(path: &Path, doc: &Doc) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_edits_share_one_pad_per_directory_and_roll_back() {
+        let dir = std::env::temp_dir().join(format!("sv-scratch-agent-{}", std::process::id()));
+        let mut s = Scratchpad::new(dir.clone(), 400.0);
+        let d = dir.join("proj").to_string_lossy().into_owned();
+        let note = Item::Text {
+            at: [0.0, 0.0],
+            text: "plan".into(),
+            color: 0,
+        };
+        s.edit(Some(&d), |items| {
+            items.push(note);
+            Ok(())
+        })
+        .unwrap();
+        // Another spelling of the same directory sees the same pad.
+        let alt = format!("{}/", d.replace('\\', "/"));
+        assert_eq!(s.items_for(Some(&alt)).1.len(), 1);
+        // A failed edit leaves nothing behind.
+        let failed = s.edit(Some(&alt), |items| {
+            items.clear();
+            Err::<(), _>("no".into())
+        });
+        assert!(failed.is_err());
+        assert_eq!(s.items_for(Some(&d)).1.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn pads_persist_per_project_and_skip_empty_notes() {

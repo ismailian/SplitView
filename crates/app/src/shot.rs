@@ -2,7 +2,7 @@
 //! through egui's own screenshot command (works without a visible desktop),
 //! write a PNG and exit. Used for the README/site screenshots and release
 //! checks. Scenes: `main`, `settings`, `palette`, `background`, `picker`,
-//! `remote`, `remote-off`, `zoom`.
+//! `shell`, `mcp`, `zoom`.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -136,19 +136,10 @@ pub fn drive(app: &mut App, ctx: &egui::Context) {
             let key = app.windows[0].key;
             match scene.as_str() {
                 "settings" => app.modal = Some((key, Modal::settings())),
-                "remote-off" => app.modal = Some((key, Modal::settings_at(Section::Remote))),
-                "remote" => {
-                    let _ = app.hub.remote.enable(
-                        &app.hub,
-                        // Loopback: a screenshot must not open a LAN port
-                        // (or trigger the Windows Firewall prompt).
-                        crate::remote::RemoteConfig {
-                            bind: crate::remote::BindMode::Loopback,
-                            ..app.settings.remote.config()
-                        },
-                    );
-                    let _ = app.hub.remote.start_pairing(&app.hub);
-                    app.modal = Some((key, Modal::settings_at(Section::Remote)));
+                "shell" => app.modal = Some((key, Modal::settings_at(Section::Shell))),
+                "mcp" => {
+                    app.apply_mcp(); // per settings.json: on only if enabled there
+                    app.modal = Some((key, Modal::settings_at(Section::Mcp)));
                 }
                 "palette" => {
                     app.modal = Some((

@@ -4,7 +4,7 @@
 //! function here is **pure** — no UI, no I/O — so the invariants can be unit
 //! tested. The renderer reads this tree and lays the panes out elsewhere.
 
-/// Opaque pane identifier. Shown to remote clients as `pane-<n>`.
+/// Opaque pane identifier (also what MCP clients address a pane by).
 pub type PaneId = u64;
 
 /// `Row` = side-by-side (a vertical divider); `Column` = stacked (horizontal).

@@ -71,27 +71,6 @@ impl App {
                     if w::icon_button(ui, ph::GEAR_SIX, "Settings (prefix ,)", false).clicked() {
                         actions.push("open_settings");
                     }
-                    // Remote indicator: only while the server is on.
-                    let rs = &self.remote_status;
-                    if rs.enabled {
-                        let live = !rs.sessions.is_empty();
-                        let tip = if live {
-                            format!("Remote control: {} live session(s)", rs.sessions.len())
-                        } else {
-                            "Remote control is on (no one connected)".to_owned()
-                        };
-                        let r = w::icon_button(ui, ph::BROADCAST, &tip, true);
-                        if live {
-                            ui.painter().circle_filled(
-                                r.rect.right_top() + vec2(-5.0, 5.0),
-                                3.0,
-                                WARN,
-                            );
-                        }
-                        if r.clicked() {
-                            actions.push("open_settings_remote");
-                        }
-                    }
                     let bg = self.windows[wi].background.len();
                     if bg > 0 {
                         let r = w::icon_button(
@@ -212,13 +191,6 @@ impl App {
         });
         for a in actions {
             match a {
-                "open_settings_remote" => {
-                    let key = self.windows[wi].key;
-                    self.modal = Some((
-                        key,
-                        crate::dialogs::Modal::settings_at(crate::settings_ui::Section::Remote),
-                    ));
-                }
                 "toggle_sidebar_click" => {
                     let w = &mut self.windows[wi];
                     let open = !w.sidebar.open;
@@ -300,14 +272,11 @@ impl App {
                 ui.label(small(format!("v{}", theme::VERSION), TX3));
                 ui.add_space(10.0);
                 self.claude_meters(ui, wi);
-                if self.remote_status.enabled {
-                    let n = self.remote_status.sessions.len();
-                    let (t, c) = if n > 0 {
-                        (format!("{} remote · {n} live", ph::BROADCAST), WARN)
-                    } else {
-                        (format!("{} remote on", ph::BROADCAST), ACC)
-                    };
-                    item(ui, small(t, c));
+                if let Some(m) = &self.mcp {
+                    ui.add_space(10.0);
+                    ui.label(small(format!("{} mcp", ph::ROBOT), ACC))
+                        .on_hover_text(format!("MCP server on {} (Settings → MCP)", m.url()));
+                    ui.add_space(10.0);
                 }
                 if w.focus == Focus::Editor
                     && let Some(info) = w.editor.status()
@@ -334,7 +303,7 @@ impl App {
 
     pub fn show_side_panels(&mut self, ui: &mut Ui, wi: usize) {
         let key = self.windows[wi].key;
-        let modal = self.modal.as_ref().is_some_and(|(k, _)| *k == key) || !self.pairing.is_empty();
+        let modal = self.modal.as_ref().is_some_and(|(k, _)| *k == key);
         if self.windows[wi].sidebar.open {
             self.sync_sidebar(wi);
             let width = self.windows[wi].sidebar.width;

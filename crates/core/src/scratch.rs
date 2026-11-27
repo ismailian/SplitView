@@ -105,6 +105,19 @@ pub fn bounds(points: &[[f32; 2]]) -> Option<([f32; 2], [f32; 2])> {
     }))
 }
 
+/// Where a note goes when no position is given: the left edge, under every
+/// item (a note's height estimated at `line_h` per line).
+pub fn next_free_at(items: &[Item], line_h: f32) -> [f32; 2] {
+    let bottom = items
+        .iter()
+        .map(|i| match i {
+            Item::Text { at, text, .. } => at[1] + line_h * text.lines().count().max(1) as f32,
+            Item::Ink { points, .. } => points.iter().map(|p| p[1]).fold(0.0, f32::max),
+        })
+        .fold(0.0, f32::max);
+    [16.0, bottom + 16.0]
+}
+
 /// The project a directory belongs to: the nearest ancestor (or itself) for
 /// which `is_repo` is true, else the directory itself.
 pub fn project_root(dir: &str, is_repo: impl Fn(&str) -> bool) -> String {
@@ -173,6 +186,26 @@ mod tests {
         };
         translate(&mut note, [-3.0, 1.0]);
         assert!(matches!(note, Item::Text { at: [0.0, 5.0], .. }));
+    }
+
+    #[test]
+    fn free_spot_is_under_everything() {
+        assert_eq!(next_free_at(&[], 20.0), [16.0, 16.0]);
+        let items = [
+            Item::Text {
+                at: [0.0, 10.0],
+                text: "a
+b"
+                .into(),
+                color: 0,
+            },
+            Item::Ink {
+                shape: Shape::Rect,
+                points: vec![[0.0, 0.0], [5.0, 30.0]],
+                color: 0,
+            },
+        ];
+        assert_eq!(next_free_at(&items, 20.0), [16.0, 66.0]);
     }
 
     #[test]
